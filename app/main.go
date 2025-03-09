@@ -16,9 +16,11 @@ const (
 
 var _ = net.Listen
 var _ = os.Exit
+var kvStore map[string]string
 
 func main() {
 	fmt.Println("Logs from your program will appear here!")
+	kvStore = make(map[string]string)
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -65,6 +67,12 @@ func handleConnection(connection net.Conn) (err error) {
 			buf = appendSimpleString(buf, "PONG")
 		case "echo":
 			buf = appendSimpleString(buf, strings.Join(cmd[1:], " "))
+		case "set":
+			result := set(cmd)
+			buf = appendSimpleString(buf, result)
+		case "get":
+			result := get(cmd)
+			buf = appendSimpleString(buf, result)
 		default:
 			panic(cmd[0])
 		}
@@ -76,6 +84,21 @@ func handleConnection(connection net.Conn) (err error) {
 	}
 
 	return nil
+}
+
+func set(cmd []string) string {
+	if len(cmd) != 3 {
+		return "ERR wrong number of arguments for command"
+	}
+	kvStore[cmd[1]] = cmd[2]
+	return "OK"
+}
+
+func get(cmd []string) string {
+	if len(cmd) != 2 {
+		return "ERR wrong number of arguments for command"
+	}
+	return kvStore[cmd[1]]
 }
 
 func appendSimpleString(buf []byte, str string) []byte {
