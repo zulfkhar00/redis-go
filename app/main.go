@@ -62,7 +62,7 @@ func handleConnection(connection net.Conn) (err error) {
 		case "command":
 			buf = appendSimpleString(buf, "")
 		case "ping":
-			buf = appendSimpleString(buf, "pong")
+			buf = appendSimpleString(buf, "PONG")
 		case "echo":
 			buf = appendSimpleString(buf, strings.Join(cmd[1:], " "))
 		default:
