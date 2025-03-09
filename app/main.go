@@ -20,24 +20,25 @@ func main() {
 		os.Exit(1)
 	}
 	defer l.Close()
-
-	connection, err := l.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
-	}
-	defer connection.Close()
-
-	buf := make([]byte, 1024)
-	for {
-		_, err := connection.Read(buf)
-		if errors.Is(err, io.EOF) {
-			break
+	go func() {
+		connection, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
 		}
+		defer connection.Close()
 
-		_, err = connection.Write([]byte("+PONG\r\n"))
-		if err != err {
-			return
+		buf := make([]byte, 1024)
+		for {
+			_, err := connection.Read(buf)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			_, err = connection.Write([]byte("+PONG\r\n"))
+			if err != err {
+				return
+			}
 		}
-	}
+	}()
 }
