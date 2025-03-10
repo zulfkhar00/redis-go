@@ -1,5 +1,5 @@
 In this challenge, I am building a toy Redis clone that's capable of handling
-basic commands like `PING`, `SET` and `GET`.
+basic commands like `PING`, `SET` and `GET`. In my journet, I am also learning about event loops, the Redis protocol and more.
 
 **Note**
 
