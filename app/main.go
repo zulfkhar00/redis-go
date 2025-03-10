@@ -63,6 +63,7 @@ func handleConnection(connection net.Conn) (err error) {
 		}
 
 		buf = buf[:0]
+		//
 
 		switch strings.ToLower(cmd[0]) {
 		case "command":
