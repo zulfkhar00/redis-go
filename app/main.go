@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -19,9 +20,12 @@ const (
 var _ = net.Listen
 var _ = os.Exit
 var kvStore map[string][]string
+var dir = flag.String("dir", "", "RDB directory path")
+var dbfilename = flag.String("dbfilename", "", "RDB file name")
 
 func main() {
 	fmt.Println("Logs from your program will appear here!")
+	flag.Parse()
 	kvStore = make(map[string][]string)
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
@@ -73,6 +77,16 @@ func handleConnection(connection net.Conn) (err error) {
 		case "get":
 			result := get(cmd)
 			buf = []byte(formatBulkString(result))
+		case "config":
+			if len(cmd) <= 2 {
+				continue
+			}
+			if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dir" {
+				buf = []byte(formatRESPArray([]string{"dir", *dir}))
+			}
+			if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dbfilename" {
+				buf = []byte(formatRESPArray([]string{"dbfilename", *dbfilename}))
+			}
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
 		}
@@ -134,6 +148,14 @@ func formatBulkString(value string) string {
 	}
 	// Return the bulk string format: $<length>\r\n<value>\r\n
 	return "$" + strconv.Itoa(len(value)) + "\r\n" + value + "\r\n"
+}
+
+func formatRESPArray(elems []string) string {
+	resp := fmt.Sprintf("*%d\r\n", len(elems))
+	for _, elem := range elems {
+		resp += formatBulkString(elem)
+	}
+	return resp
 }
 
 func millisecondsSince1970(t time.Time) string {
