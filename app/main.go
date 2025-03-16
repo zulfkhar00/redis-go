@@ -1,16 +1,42 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+type ParsedRDBData struct {
+	dbIndexToDB               map[uint64]map[string]string
+	dbIndexToKeyExpireTimeMap map[uint64]map[string]string
+	metadataData              map[string]string
+}
+
+type EightBitStringInteger struct{}
+
+func (e EightBitStringInteger) Error() string {
+	return "this is a 8 bit string integer"
+}
+
+type SixteenBitStringInteger struct{}
+
+func (e SixteenBitStringInteger) Error() string {
+	return "this is a 16 bit string integer"
+}
+
+type ThirtyTwoBitStringInteger struct{}
+
+func (e ThirtyTwoBitStringInteger) Error() string {
+	return "this is a 32 bit string integer"
+}
 
 const (
 	Array      = '*'
@@ -26,7 +52,9 @@ var dbfilename = flag.String("dbfilename", "", "RDB file name")
 func main() {
 	fmt.Println("Logs from your program will appear here!")
 	flag.Parse()
-	kvStore = make(map[string][]string)
+
+	parsedRDBData := readRDBFile()
+	kvStore = computeKVStoreFromRDB(parsedRDBData)
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -87,6 +115,9 @@ func handleConnection(connection net.Conn) (err error) {
 			if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dbfilename" {
 				buf = []byte(formatRESPArray([]string{"dbfilename", *dbfilename}))
 			}
+		case "keys":
+			result := keys(cmd)
+			buf = []byte(formatRESPArray(result))
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
 		}
@@ -139,6 +170,69 @@ func get(cmd []string) string {
 		return ""
 	}
 	return val
+}
+
+func keys(cmd []string) []string {
+	requestedKeys := make([]string, 0)
+	if len(cmd) < 2 {
+		return requestedKeys
+	}
+	if cmd[1] == "*" {
+		for key := range kvStore {
+			requestedKeys = append(requestedKeys, key)
+		}
+	}
+
+	return requestedKeys
+}
+
+func computeKVStoreFromRDB(parsedRDBData *ParsedRDBData) map[string][]string {
+	cache := make(map[string][]string)
+	cacheFromRDB := parsedRDBData.dbIndexToDB[0]
+	keyToExpireTime := parsedRDBData.dbIndexToKeyExpireTimeMap[0]
+	for key, val := range cacheFromRDB {
+		if _, exists := keyToExpireTime[key]; !exists {
+			cache[key] = []string{val, "-1"}
+			continue
+		}
+
+		expireTimeStr := keyToExpireTime[key]
+		if expireTimeStr[len(expireTimeStr)-2:] == "ms" {
+			expireTimeStr = expireTimeStr[:len(expireTimeStr)-2]
+			expireTime := unixMsTimestampToTime(expireTimeStr)
+			cache[key] = []string{val, millisecondsSince1970(expireTime)}
+		} else if expireTimeStr[len(expireTimeStr)-1:] == "s" {
+			expireTimeStr = expireTimeStr[:len(expireTimeStr)-1]
+			expireTime := unixSecTimestampToTime(expireTimeStr)
+			cache[key] = []string{val, millisecondsSince1970(expireTime)}
+		}
+	}
+
+	return cache
+}
+
+func unixMsTimestampToTime(unixTimestamp string) time.Time {
+	// Convert the string to an int64 (milliseconds)
+	expireTimestampMS, err := strconv.ParseInt(unixTimestamp, 10, 64)
+	if err != nil {
+		log.Fatal("Error converting timestamp string:", err)
+	}
+
+	// Convert milliseconds to seconds and nanoseconds
+	seconds := expireTimestampMS / 1000
+	nanoseconds := (expireTimestampMS % 1000) * 1000000
+
+	return time.Unix(seconds, nanoseconds)
+}
+
+func unixSecTimestampToTime(unixTimestamp string) time.Time {
+	// Convert the string to an int64 (seconds)
+	expireTimestampSec, err := strconv.ParseInt(unixTimestamp, 10, 64)
+	if err != nil {
+		log.Fatal("Error converting timestamp string:", err)
+	}
+
+	return time.Unix(expireTimestampSec, 0) // 0 nanoseconds
 }
 
 func formatBulkString(value string) string {
@@ -251,4 +345,311 @@ func parseNumber(buf []byte, start int) (n, i int, err error) {
 	}
 
 	return n, i, nil
+}
+
+func readRDBFile() *ParsedRDBData {
+	if (*dir == "" && *dbfilename != "") || (*dir != "" && *dbfilename == "") {
+		return &ParsedRDBData{}
+	}
+	if *dir == "" && *dbfilename == "" {
+		return &ParsedRDBData{}
+	}
+
+	filepath := *dir
+	if filepath[len(filepath)-1] != '/' {
+		filepath += "/"
+	}
+	filepath += *dbfilename
+
+	// check if file exists
+	_, err := os.Stat(filepath)
+	if os.IsNotExist(err) {
+		return &ParsedRDBData{}
+	}
+
+	file, err := os.Open(filepath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	// Parse the RDB file content
+	parsedRDBData, err := parseRDBData(file)
+	if err != nil {
+		log.Fatalf("Error parsing RDB file: %v", err)
+		return &ParsedRDBData{}
+	}
+
+	return parsedRDBData
+}
+
+func parseRDBData(file *os.File) (*ParsedRDBData, error) {
+	err := parseHeaderSection(file)
+	if err != nil {
+		return nil, err
+	}
+
+	metadataData, err := parseMetadataSection(file)
+	if err != nil {
+		return nil, err
+	}
+
+	dbIndexToDB, dbIndexToKeyExpireTimeMap, err := parseDBSection(file)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ParsedRDBData{
+		dbIndexToDB:               dbIndexToDB,
+		dbIndexToKeyExpireTimeMap: dbIndexToKeyExpireTimeMap,
+		metadataData:              metadataData,
+	}, nil
+}
+
+func parseDBSection(file *os.File) (dbIndexToDB map[uint64]map[string]string,
+	dbIndexToKeyExpireTimeMap map[uint64]map[string]string, err error) {
+	dbIndexToDB = make(map[uint64]map[string]string)
+	dbIndexToKeyExpireTimeMap = make(map[uint64]map[string]string)
+
+	firstDbSection := true
+	for {
+		db := make(map[string]string)
+		dbKeyExpireTime := make(map[string]string)
+
+		if !firstDbSection {
+			firstByte := make([]byte, 1)
+			_, err := file.Read(firstByte)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if firstByte[0] == 0xFF {
+				// end of file
+				break
+			}
+
+			if firstByte[0] != 0xFE {
+				// should be start of Database subsection
+				return nil, nil, fmt.Errorf("should be start of Database subsection: first byte is not 0xFE")
+			}
+		}
+
+		// read Database subsection
+		dbIndex, err := decodeSizeEncoding(file)
+		if err != nil {
+			return nil, nil, fmt.Errorf("Error reading Database subsection index: %v", err)
+		}
+		hashTableSizeFlag := make([]byte, 1)
+		_, err = file.Read(hashTableSizeFlag)
+		if err != nil {
+			return nil, nil, err
+		}
+		if hashTableSizeFlag[0] != 0xFB {
+			return nil, nil, fmt.Errorf("after DB index there is no hashtable size flag: 0xFB")
+		}
+
+		hashTableSize, err := decodeSizeEncoding(file)
+		if err != nil {
+			return nil, nil, fmt.Errorf("Error reading Database subsection hash table size: %v", err)
+		}
+		_, err = decodeSizeEncoding(file) // number of expiry keys
+		if err != nil {
+			return nil, nil, fmt.Errorf("Error reading Database subsection expire hash table size: %v", err)
+		}
+
+		var i uint64
+		for i = 0; i < hashTableSize; i++ {
+			// parse key value section
+			firstByte := make([]byte, 1)
+			_, err := file.Read(firstByte)
+			if err != nil {
+				return nil, nil, err
+			}
+			var unixExpireTimeMs, unixExpireTimeSec uint64
+			if firstByte[0] == 0xFC {
+				// expiration in milliseconds
+				exipreTimeBytes := make([]byte, 8)
+				_, err = file.Read(exipreTimeBytes)
+				if err != nil {
+					return nil, nil, err
+				}
+				unixExpireTimeMs = binary.LittleEndian.Uint64(exipreTimeBytes)
+			}
+			if firstByte[0] == 0xFD {
+				// expiration in seconds
+				exipreTimeBytes := make([]byte, 4)
+				_, err = file.Read(exipreTimeBytes)
+				if err != nil {
+					return nil, nil, err
+				}
+				unixExpireTimeSec = binary.LittleEndian.Uint64(exipreTimeBytes)
+			}
+
+			var key, val string
+
+			valueTypeEncodingFlag := firstByte[0]
+			if valueTypeEncodingFlag == 0x00 {
+				// value is string encoded
+				key = decodeStringEncoding(file)
+				val = decodeStringEncoding(file)
+			} else {
+				// unsupported value encoding: int/map/list etc.
+				return nil, nil, fmt.Errorf("unsupported value encoding")
+			}
+
+			db[key] = val
+			if unixExpireTimeMs == 0 && unixExpireTimeSec != 0 {
+				dbKeyExpireTime[key] = fmt.Sprintf("%ds", unixExpireTimeSec)
+			}
+			if unixExpireTimeMs != 0 && unixExpireTimeSec == 0 {
+				dbKeyExpireTime[key] = fmt.Sprintf("%dms", unixExpireTimeMs)
+			}
+		}
+
+		dbIndexToDB[dbIndex] = db
+		dbIndexToKeyExpireTimeMap[dbIndex] = dbKeyExpireTime
+		firstDbSection = false
+	}
+
+	// TODO:
+	// 1. read 8-byte CRC64 checksum of the entire file
+	// 2. compute entire file checksum and compare both checksums
+	checksum := make([]byte, 8)
+	_, err = file.Read(checksum)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return dbIndexToDB, dbIndexToKeyExpireTimeMap, nil
+}
+
+func parseHeaderSection(file *os.File) error {
+	// Read the magic header to confirm it's a valid RDB file
+	magicBytes := make([]byte, 9) // "REDIS" + version byte
+	_, err := file.Read(magicBytes)
+	if err != nil {
+		return err
+	}
+	if string(magicBytes[:5]) != "REDIS" || string(magicBytes[5:]) != "0011" {
+		return fmt.Errorf("not a valid RDB file")
+	}
+	return nil
+}
+
+func parseMetadataSection(file *os.File) (map[string]string, error) {
+	metadata := make(map[string]string)
+
+	for {
+		metadataSectionStart := make([]byte, 1)
+		_, err := file.Read(metadataSectionStart)
+		if err != nil {
+			return nil, err
+		}
+		if metadataSectionStart[0] == 0xFE {
+			// Database start flag
+			break
+		}
+		if metadataSectionStart[0] != 0xFA {
+			return nil, fmt.Errorf("no meatdata header flag: 0xFE")
+		}
+		metadataKey := decodeStringEncoding(file)
+		metadataVal := decodeStringEncoding(file)
+		metadata[metadataKey] = metadataVal
+	}
+
+	return metadata, nil
+}
+
+func decodeStringEncoding(file *os.File) string {
+	stringSize, err := decodeSizeEncoding(file)
+	if err != nil {
+		switch err.(type) {
+		case EightBitStringInteger:
+			secondByte := make([]byte, 1)
+			_, err = file.Read(secondByte)
+			if err != nil {
+				return "0"
+			}
+			return strconv.Itoa(int(secondByte[0]))
+		case *SixteenBitStringInteger:
+			nextTwoBytes := make([]byte, 2)
+			_, err = file.Read(nextTwoBytes)
+			if err != nil {
+				return "0"
+			}
+			return strconv.FormatUint(binary.LittleEndian.Uint64(nextTwoBytes), 10)
+		case *ThirtyTwoBitStringInteger:
+			nextThreeBytes := make([]byte, 3)
+			_, err = file.Read(nextThreeBytes)
+			if err != nil {
+				return "0"
+			}
+			return strconv.FormatUint(binary.LittleEndian.Uint64(nextThreeBytes), 10)
+		default:
+			return "0"
+		}
+	}
+	strBytes := make([]byte, stringSize)
+	_, err = file.Read(strBytes)
+	if err != nil {
+		return ""
+	}
+
+	return string(strBytes)
+}
+
+func decodeSizeEncoding(file *os.File) (uint64, error) {
+	firstByte := make([]byte, 1)
+	_, err := file.Read(firstByte)
+	if err != nil {
+		return 0, err
+	}
+	firstTwoBits := firstByte[0] >> 6
+	if firstTwoBits == 0b00 {
+		return uint64(firstByte[0]), nil
+	}
+	if firstTwoBits == 0b01 {
+		sixBitFirstByte := (firstByte[0] << 2) >> 2
+		secondByte := make([]byte, 1)
+		_, err = file.Read(secondByte)
+		if err != nil {
+			return 0, err
+		}
+		size := uint64((uint16(sixBitFirstByte) << 8) | uint16(secondByte[0]))
+		return size, nil
+	}
+	if firstTwoBits == 0b10 {
+		sizeBytes := make([]byte, 4)
+		_, err = file.Read(sizeBytes)
+		if err != nil {
+			return 0, err
+		}
+		return binary.BigEndian.Uint64(sizeBytes), nil
+	}
+	if firstTwoBits == 0b11 {
+		// 0x3F is 0b00111111
+		stringEncodingType := firstByte[0]
+		var value uint64
+
+		switch stringEncodingType {
+		case 0xC0:
+			// 8 bit string integer
+			return 0, EightBitStringInteger{}
+		case 0xC1:
+			// 16-bit integer string encoding (little-endian)
+			return 0, SixteenBitStringInteger{}
+
+		case 0xC2:
+			// 32-bit integer string encoding (little-endian)
+			return 0, ThirtyTwoBitStringInteger{}
+		default:
+			// 0xC3 string encoding type means that the string is compressed with the LZF algorithm
+			// skipping this case
+			value = 0
+		}
+
+		return value, nil
+	}
+
+	return 0, fmt.Errorf("Cannot understand size encoding")
 }
