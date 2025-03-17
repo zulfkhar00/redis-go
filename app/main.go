@@ -43,11 +43,14 @@ const (
 	BulkString = '$'
 )
 
+const defaultPort = 6379
+
 var _ = net.Listen
 var _ = os.Exit
 var kvStore map[string][]string
 var dir = flag.String("dir", "", "RDB directory path")
 var dbfilename = flag.String("dbfilename", "", "RDB file name")
+var port = flag.Int("port", defaultPort, "Port number")
 
 func main() {
 	fmt.Println("Logs from your program will appear here!")
@@ -56,7 +59,7 @@ func main() {
 	parsedRDBData := readRDBFile()
 	kvStore = computeKVStoreFromRDB(parsedRDBData)
 
-	l, err := net.Listen("tcp", "0.0.0.0:6379")
+	l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(*port))
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
