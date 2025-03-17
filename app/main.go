@@ -48,7 +48,9 @@ type RedisInfo struct {
 }
 
 type ReplicationInfo struct {
-	role string
+	role             string
+	masterReplID     string
+	masterReplOffset uint64
 }
 
 var redisInfo RedisInfo
@@ -95,10 +97,17 @@ func configureInfo() {
 	if *replicaOf != "" {
 		role = "slave"
 	}
+	masterReplID := ""
+	masterReplOffset := 0
+	if *replicaOf == "" {
+		masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+	}
 
 	redisInfo = RedisInfo{
 		replication: ReplicationInfo{
-			role: role,
+			role:             role,
+			masterReplID:     masterReplID,
+			masterReplOffset: uint64(masterReplOffset),
 		},
 	}
 }
@@ -226,6 +235,8 @@ func info(cmd []string) string {
 	if cmd[1] == "replication" {
 		res := "# Replication"
 		res += fmt.Sprintf("role:%s", redisInfo.replication.role)
+		res += fmt.Sprintf("master_replid:%s\n", redisInfo.replication.masterReplID)
+		res += fmt.Sprintf("master_repl_offset:%d\n", redisInfo.replication.masterReplOffset)
 
 		return res
 	}
