@@ -43,6 +43,16 @@ const (
 	BulkString = '$'
 )
 
+type RedisInfo struct {
+	replication ReplicationInfo
+}
+
+type ReplicationInfo struct {
+	role string
+}
+
+var redisInfo RedisInfo
+
 const defaultPort = 6379
 
 var _ = net.Listen
@@ -55,6 +65,8 @@ var port = flag.Int("port", defaultPort, "Port number")
 func main() {
 	fmt.Println("Logs from your program will appear here!")
 	flag.Parse()
+
+	configureInfo()
 
 	parsedRDBData := readRDBFile()
 	kvStore = computeKVStoreFromRDB(parsedRDBData)
@@ -74,6 +86,14 @@ func main() {
 		}
 
 		go handleConnection(connection)
+	}
+}
+
+func configureInfo() {
+	redisInfo = RedisInfo{
+		replication: ReplicationInfo{
+			role: "master",
+		},
 	}
 }
 
@@ -121,6 +141,9 @@ func handleConnection(connection net.Conn) (err error) {
 		case "keys":
 			result := keys(cmd)
 			buf = []byte(formatRESPArray(result))
+		case "info":
+			result := info(cmd)
+			buf = []byte(formatBulkString(result))
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
 		}
@@ -187,6 +210,21 @@ func keys(cmd []string) []string {
 	}
 
 	return requestedKeys
+}
+
+func info(cmd []string) string {
+	if len(cmd) == 1 {
+		// all infos
+		return ""
+	}
+	if cmd[1] == "replication" {
+		res := "# Replication"
+		res += fmt.Sprintf("role:%s", redisInfo.replication.role)
+
+		return res
+	}
+
+	return ""
 }
 
 func computeKVStoreFromRDB(parsedRDBData *ParsedRDBData) map[string][]string {
