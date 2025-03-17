@@ -61,6 +61,7 @@ var kvStore map[string][]string
 var dir = flag.String("dir", "", "RDB directory path")
 var dbfilename = flag.String("dbfilename", "", "RDB file name")
 var port = flag.Int("port", defaultPort, "Port number")
+var replicaOf = flag.String("replicaof", "", "Address of master/parent server")
 
 func main() {
 	fmt.Println("Logs from your program will appear here!")
@@ -90,9 +91,14 @@ func main() {
 }
 
 func configureInfo() {
+	role := "master"
+	if *replicaOf != "" {
+		role = "slave"
+	}
+
 	redisInfo = RedisInfo{
 		replication: ReplicationInfo{
-			role: "master",
+			role: role,
 		},
 	}
 }
