@@ -452,7 +452,8 @@ func parseDBSection(file *os.File) (dbIndexToDB map[uint64]map[string]string,
 		if err != nil {
 			return nil, nil, fmt.Errorf("Error reading Database subsection hash table size: %v", err)
 		}
-		_, err = decodeSizeEncoding(file) // number of expiry keys
+		expiredKeySize, err := decodeSizeEncoding(file) // number of expiry keys
+		fmt.Printf("expired key size: %d\n", expiredKeySize)
 		if err != nil {
 			return nil, nil, fmt.Errorf("Error reading Database subsection expire hash table size: %v", err)
 		}
@@ -466,7 +467,9 @@ func parseDBSection(file *os.File) (dbIndexToDB map[uint64]map[string]string,
 				return nil, nil, err
 			}
 			var unixExpireTimeMs, unixExpireTimeSec uint64
+			curByteIsFlag := false
 			if firstByte[0] == 0xFC {
+				curByteIsFlag = true
 				// expiration in milliseconds
 				exipreTimeBytes := make([]byte, 8)
 				_, err = file.Read(exipreTimeBytes)
@@ -476,6 +479,7 @@ func parseDBSection(file *os.File) (dbIndexToDB map[uint64]map[string]string,
 				unixExpireTimeMs = binary.LittleEndian.Uint64(exipreTimeBytes)
 			}
 			if firstByte[0] == 0xFD {
+				curByteIsFlag = true
 				// expiration in seconds
 				exipreTimeBytes := make([]byte, 4)
 				_, err = file.Read(exipreTimeBytes)
@@ -487,6 +491,12 @@ func parseDBSection(file *os.File) (dbIndexToDB map[uint64]map[string]string,
 
 			var key, val string
 
+			if curByteIsFlag {
+				_, err = file.Read(firstByte)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 			valueTypeEncodingFlag := firstByte[0]
 			if valueTypeEncodingFlag == 0x00 {
 				// value is string encoded
@@ -651,5 +661,5 @@ func decodeSizeEncoding(file *os.File) (uint64, error) {
 		return value, nil
 	}
 
-	return 0, fmt.Errorf("Cannot understand size encoding")
+	return 0, fmt.Errorf("cannot understand size encoding")
 }
