@@ -70,6 +70,11 @@ func main() {
 	flag.Parse()
 
 	configureInfo()
+	err := sendHandshake()
+	if err != nil {
+		fmt.Printf("Error sending handshake to master: %v\n", err)
+		return
+	}
 
 	parsedRDBData := readRDBFile()
 	kvStore = computeKVStoreFromRDB(parsedRDBData)
@@ -92,24 +97,39 @@ func main() {
 	}
 }
 
-func configureInfo() {
-	role := "master"
-	if *replicaOf != "" {
-		role = "slave"
-	}
-	masterReplID := ""
-	masterReplOffset := 0
+func sendHandshake() error {
+	// send handshake to master node I am replica
 	if *replicaOf == "" {
-		masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+		return nil
+	}
+	parts := strings.Split(*replicaOf, " ")
+	if len(parts) != 2 {
+		os.Exit(0)
+	}
+	masterAddr := parts[0] + ":" + parts[1]
+	connection, err := net.Dial("tcp", masterAddr)
+	connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err != nil {
+		return fmt.Errorf("tried to connect to master node on %s", masterAddr)
+	}
+	_, err = connection.Write([]byte(formatRESPArray([]string{"PING"})))
+	if err != nil {
+		return fmt.Errorf("couldn't send PING to master node")
 	}
 
-	redisInfo = RedisInfo{
-		replication: ReplicationInfo{
-			role:             role,
-			masterReplID:     masterReplID,
-			masterReplOffset: uint64(masterReplOffset),
-		},
+	// read response: should get PONG
+	buf := make([]byte, 30)
+	n, err := connection.Read(buf)
+	if errors.Is(err, io.EOF) {
+		return err
 	}
+	buf = buf[:n]
+	resp := strings.TrimSpace(string(buf))
+	if resp != "+PONG" {
+		return fmt.Errorf("unexpected response: %s", resp)
+	}
+
+	return nil
 }
 
 func handleConnection(connection net.Conn) (err error) {
@@ -242,6 +262,26 @@ func info(cmd []string) string {
 	}
 
 	return ""
+}
+
+func configureInfo() {
+	role := "master"
+	if *replicaOf != "" {
+		role = "slave"
+	}
+	masterReplID := ""
+	masterReplOffset := 0
+	if *replicaOf == "" {
+		masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+	}
+
+	redisInfo = RedisInfo{
+		replication: ReplicationInfo{
+			role:             role,
+			masterReplID:     masterReplID,
+			masterReplOffset: uint64(masterReplOffset),
+		},
+	}
 }
 
 func computeKVStoreFromRDB(parsedRDBData *ParsedRDBData) map[string][]string {
