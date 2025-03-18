@@ -65,6 +65,10 @@ var dbfilename = flag.String("dbfilename", "", "RDB file name")
 var port = flag.Int("port", defaultPort, "Port number")
 var replicaOf = flag.String("replicaof", "", "Address of master/parent server")
 
+// replica specific variables
+var masterReplicationID = 0
+var masterOffset = -1
+
 func main() {
 	fmt.Println("Logs from your program will appear here!")
 	flag.Parse()
@@ -107,6 +111,7 @@ func sendHandshake() error {
 	// PART 1: send `PING to master`
 	// PART 2a: send `REPLCONF listening-port <PORT>`
 	// PART 2b: send `REPLCONF capa psync2`
+	// PART 3: send `PSYNC <replicationID> <masterOffset>`
 
 	// PART 1
 	parts := strings.Split(*replicaOf, " ")
@@ -116,7 +121,7 @@ func sendHandshake() error {
 	masterHost, masterPort := parts[0], parts[1]
 	masterAddr := masterHost + ":" + masterPort
 	connection, err := net.Dial("tcp", masterAddr)
-	connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+	connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err != nil {
 		return fmt.Errorf("tried to connect to master node on %s", masterAddr)
 	}
@@ -132,23 +137,78 @@ func sendHandshake() error {
 		return err
 	}
 	buf = buf[:n]
+	fmt.Printf("Replica received: %v\n", string(buf))
 	resp := strings.TrimSpace(string(buf))
 	if resp != "+PONG" {
-		return fmt.Errorf("unexpected response: %s", resp)
+		return fmt.Errorf("unexpected response, at PART1: %s", resp)
 	}
 
 	// PART 2a
 	replConfCmds1 := []string{"REPLCONF", "listening-port", fmt.Sprint(*port)}
+	fmt.Printf("Replica sent: %v\n", replConfCmds1)
 	_, err = connection.Write([]byte(formatRESPArray(replConfCmds1)))
 	if err != nil {
 		return err
 	}
+	buf = make([]byte, 100)
+	n, err = connection.Read(buf)
+	if errors.Is(err, io.EOF) {
+		return err
+	}
+	buf = buf[:n]
+	fmt.Printf("Replica received: %v\n", string(buf))
+	resp = strings.TrimSpace(string(buf))
+	if resp != "+OK" {
+		return fmt.Errorf("unexpected response, at PART2a: %s", resp)
+	}
+
 	// PART 2b
 	replConfCmds2 := []string{"REPLCONF", "capa", "psync2"}
+	fmt.Printf("Replica sent: %v\n", replConfCmds2)
 	_, err = connection.Write([]byte(formatRESPArray(replConfCmds2)))
 	if err != nil {
 		return err
 	}
+	buf = make([]byte, 100)
+	n, err = connection.Read(buf)
+	if errors.Is(err, io.EOF) {
+		return err
+	}
+	buf = buf[:n]
+	fmt.Printf("Replica received: %v\n", string(buf))
+	resp = strings.TrimSpace(string(buf))
+	if resp != "+OK" {
+		return fmt.Errorf("unexpected response, at PART2b: %s", resp)
+	}
+
+	// PART 3
+	psyncCmds := []string{"PSYNC"}
+	if masterReplicationID == 0 {
+		// first time connecting to master
+		psyncCmds = append(psyncCmds, "?")
+	} else {
+		psyncCmds = append(psyncCmds, fmt.Sprint(masterReplicationID))
+	}
+	psyncCmds = append(psyncCmds, fmt.Sprint(masterOffset))
+	fmt.Printf("Replica sent: %v\n", psyncCmds)
+	_, err = connection.Write([]byte(formatRESPArray(psyncCmds)))
+	if err != nil {
+		return err
+	}
+	buf = make([]byte, 100)
+	n, err = connection.Read(buf)
+	if errors.Is(err, io.EOF) {
+		return err
+	}
+	buf = buf[:n]
+	fmt.Printf("Replica received: %v\n", string(buf))
+	resp = strings.TrimSpace(string(buf))
+	parts = strings.Split(resp, " ")
+	if !(len(parts) == 3 && parts[0] == "+FULLRESYNC" && parts[2] == "0") {
+		return fmt.Errorf("unexpected response, at PART3: %s", resp)
+	}
+	// TODO: replicationID
+	_ = parts[1]
 
 	return nil
 }
@@ -202,8 +262,16 @@ func handleConnection(connection net.Conn) (err error) {
 			buf = []byte(formatBulkString(result))
 		case "replconf":
 			receiveReplicaConfig(cmd)
+			fmt.Printf("Master received: %v\n", cmd)
 			buf = appendSimpleString(buf, "OK")
+			fmt.Printf("Master sent: OK\n")
+		case "psync":
+			psync(cmd)
+			fmt.Printf("Master received: %v\n", cmd)
+			resp := fmt.Sprintf("FULLRESYNC %s %s", cmd[1], cmd[2])
+			buf = appendSimpleString(buf, resp)
 		default:
+			// TODO: implement PSYNC command for master node
 			buf = appendSimpleString(buf, "ERR unknown command")
 		}
 
@@ -277,8 +345,8 @@ func info(cmd []string) string {
 		return ""
 	}
 	if cmd[1] == "replication" {
-		res := "# Replication"
-		res += fmt.Sprintf("role:%s", redisInfo.replication.role)
+		res := "# Replication\n"
+		res += fmt.Sprintf("role:%s\n", redisInfo.replication.role)
 		res += fmt.Sprintf("master_replid:%s\n", redisInfo.replication.masterReplID)
 		res += fmt.Sprintf("master_repl_offset:%d\n", redisInfo.replication.masterReplOffset)
 
@@ -301,6 +369,22 @@ func receiveReplicaConfig(cmd []string) {
 		// last phase of PART 2 of handshake
 		return
 	}
+}
+
+func psync(cmd []string) {
+	if len(cmd) != 3 {
+		return
+	}
+	replicationIDFromReplicaStr, offsetFromReplicaStr := cmd[1], cmd[2]
+	replicationIDFromReplica, err := strconv.ParseInt(replicationIDFromReplicaStr, 10, 64)
+	if err != nil {
+		return
+	}
+	offsetFromReplica, err := strconv.ParseInt(offsetFromReplicaStr, 10, 64)
+	if err != nil {
+		return
+	}
+	masterReplicationID, masterOffset = int(replicationIDFromReplica), int(offsetFromReplica)
 }
 
 func configureInfo() {
