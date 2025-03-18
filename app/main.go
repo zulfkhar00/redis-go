@@ -98,15 +98,23 @@ func main() {
 }
 
 func sendHandshake() error {
-	// send handshake to master node I am replica
+	// check if I am replica
 	if *replicaOf == "" {
 		return nil
 	}
+
+	// HANDSHAKE:
+	// PART 1: send `PING to master`
+	// PART 2a: send `REPLCONF listening-port <PORT>`
+	// PART 2b: send `REPLCONF capa psync2`
+
+	// PART 1
 	parts := strings.Split(*replicaOf, " ")
 	if len(parts) != 2 {
 		os.Exit(0)
 	}
-	masterAddr := parts[0] + ":" + parts[1]
+	masterHost, masterPort := parts[0], parts[1]
+	masterAddr := masterHost + ":" + masterPort
 	connection, err := net.Dial("tcp", masterAddr)
 	connection.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if err != nil {
@@ -127,6 +135,19 @@ func sendHandshake() error {
 	resp := strings.TrimSpace(string(buf))
 	if resp != "+PONG" {
 		return fmt.Errorf("unexpected response: %s", resp)
+	}
+
+	// PART 2a
+	replConfCmds1 := []string{"REPLCONF", "listening-port", fmt.Sprint(*port)}
+	_, err = connection.Write([]byte(formatRESPArray(replConfCmds1)))
+	if err != nil {
+		return err
+	}
+	// PART 2b
+	replConfCmds2 := []string{"REPLCONF", "capa", "psync2"}
+	_, err = connection.Write([]byte(formatRESPArray(replConfCmds2)))
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -179,6 +200,9 @@ func handleConnection(connection net.Conn) (err error) {
 		case "info":
 			result := info(cmd)
 			buf = []byte(formatBulkString(result))
+		case "replconf":
+			receiveReplicaConfig(cmd)
+			buf = appendSimpleString(buf, "OK")
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
 		}
@@ -262,6 +286,21 @@ func info(cmd []string) string {
 	}
 
 	return ""
+}
+
+func receiveReplicaConfig(cmd []string) {
+	if len(cmd) != 3 {
+		return
+	}
+	if cmd[1] == "listening-port" {
+		// replicaPort
+		_ = cmd[2]
+		return
+	}
+	if cmd[1] == "capa" && cmd[2] == "psync2" {
+		// last phase of PART 2 of handshake
+		return
+	}
 }
 
 func configureInfo() {
