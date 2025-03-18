@@ -204,7 +204,7 @@ func sendHandshake() error {
 	fmt.Printf("Replica received: %v\n", string(buf))
 	resp = strings.TrimSpace(string(buf))
 	parts = strings.Split(resp, " ")
-	if !(len(parts) == 3 && parts[0] == "+FULLRESYNC" && parts[2] == "0") {
+	if !(len(parts) == 3 && parts[0] == "+FULLRESYNC") {
 		return fmt.Errorf("unexpected response, at PART3: %s", resp)
 	}
 	// TODO: replicationID
@@ -271,7 +271,6 @@ func handleConnection(connection net.Conn) (err error) {
 			resp := fmt.Sprintf("FULLRESYNC %s %s", cmd[1], cmd[2])
 			buf = appendSimpleString(buf, resp)
 		default:
-			// TODO: implement PSYNC command for master node
 			buf = appendSimpleString(buf, "ERR unknown command")
 		}
 
@@ -673,8 +672,7 @@ func parseDBSection(file *os.File) (dbIndexToDB map[uint64]map[string]string,
 		if err != nil {
 			return nil, nil, fmt.Errorf("Error reading Database subsection hash table size: %v", err)
 		}
-		expiredKeySize, err := decodeSizeEncoding(file) // number of expiry keys
-		fmt.Printf("expired key size: %d\n", expiredKeySize)
+		_, err = decodeSizeEncoding(file) // number of expiry keys
 		if err != nil {
 			return nil, nil, fmt.Errorf("Error reading Database subsection expire hash table size: %v", err)
 		}
