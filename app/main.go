@@ -50,7 +50,7 @@ type RedisInfo struct {
 type ReplicationInfo struct {
 	role             string
 	masterReplID     string
-	masterReplOffset uint64
+	masterReplOffset int
 }
 
 var redisInfo RedisInfo
@@ -66,8 +66,8 @@ var port = flag.Int("port", defaultPort, "Port number")
 var replicaOf = flag.String("replicaof", "", "Address of master/parent server")
 
 // replica specific variables
-var masterReplicationID = 0
-var masterOffset = -1
+var masterReplicationID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+var masterOffset = 0
 
 func main() {
 	fmt.Println("Logs from your program will appear here!")
@@ -183,7 +183,7 @@ func sendHandshake() error {
 
 	// PART 3
 	psyncCmds := []string{"PSYNC"}
-	if masterReplicationID == 0 {
+	if masterReplicationID == "" {
 		// first time connecting to master
 		psyncCmds = append(psyncCmds, "?")
 	} else {
@@ -268,7 +268,7 @@ func handleConnection(connection net.Conn) (err error) {
 		case "psync":
 			psync(cmd)
 			fmt.Printf("Master received: %v\n", cmd)
-			resp := fmt.Sprintf("FULLRESYNC %s %s", cmd[1], cmd[2])
+			resp := fmt.Sprintf("FULLRESYNC %s %d", masterReplicationID, masterOffset)
 			buf = appendSimpleString(buf, resp)
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
@@ -383,25 +383,23 @@ func psync(cmd []string) {
 	if err != nil {
 		return
 	}
-	masterReplicationID, masterOffset = int(replicationIDFromReplica), int(offsetFromReplica)
+	// masterReplicationID, masterOffset
+	_, _ = int(replicationIDFromReplica), int(offsetFromReplica)
 }
 
 func configureInfo() {
 	role := "master"
 	if *replicaOf != "" {
 		role = "slave"
-	}
-	masterReplID := ""
-	masterReplOffset := 0
-	if *replicaOf == "" {
-		masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+		masterReplicationID = ""
+		masterOffset = -1
 	}
 
 	redisInfo = RedisInfo{
 		replication: ReplicationInfo{
 			role:             role,
-			masterReplID:     masterReplID,
-			masterReplOffset: uint64(masterReplOffset),
+			masterReplID:     masterReplicationID,
+			masterReplOffset: masterOffset,
 		},
 	}
 }
