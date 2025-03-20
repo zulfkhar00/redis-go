@@ -70,6 +70,9 @@ var replicaOf = flag.String("replicaof", "", "Address of master/parent server")
 var masterReplicationID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 var masterOffset = 0
 
+// master specific variables
+var replicaConnections []net.Conn
+
 func main() {
 	fmt.Println("Logs from your program will appear here!")
 	flag.Parse()
@@ -246,16 +249,36 @@ func handleConnection(connection net.Conn) (err error) {
 		switch strings.ToLower(cmd[0]) {
 		case "command":
 			buf = appendSimpleString(buf, "")
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "ping":
 			buf = appendSimpleString(buf, "PONG")
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "echo":
 			buf = appendSimpleString(buf, strings.Join(cmd[1:], " "))
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "set":
 			result := set(cmd)
 			buf = appendSimpleString(buf, result)
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "get":
 			result := get(cmd)
 			buf = []byte(formatBulkString(result))
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "config":
 			if len(cmd) <= 2 {
 				continue
@@ -266,32 +289,52 @@ func handleConnection(connection net.Conn) (err error) {
 			if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dbfilename" {
 				buf = []byte(formatRESPArray([]string{"dbfilename", *dbfilename}))
 			}
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "keys":
 			result := keys(cmd)
 			buf = []byte(formatRESPArray(result))
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "info":
 			result := info(cmd)
 			buf = []byte(formatBulkString(result))
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "replconf":
 			receiveReplicaConfig(cmd)
 			fmt.Printf("Master received: %v\n", cmd)
 			buf = appendSimpleString(buf, "OK")
 			fmt.Printf("Master sent: OK\n")
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		case "psync":
 			psync(cmd)
 			fmt.Printf("Master received: %v\n", cmd)
 			resp := fmt.Sprintf("FULLRESYNC %s %d", masterReplicationID, masterOffset)
 			fmt.Printf("Master sent: %s\n", resp)
 			buf = appendSimpleString(buf, resp)
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
+			_, err = connection.Write(buf)
+			if err != nil {
+				return err
+			}
 		}
 
-		_, err = connection.Write(buf)
-		if err != nil {
-			return err
-		}
-		if strings.ToLower(cmd[0]) == "psync" {
+		if *replicaOf == "" && strings.ToLower(cmd[0]) == "psync" {
 			content, err := openRDBFile()
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -303,6 +346,15 @@ func handleConnection(connection net.Conn) (err error) {
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				return err
+			}
+			replicaConnections = append(replicaConnections, connection)
+		}
+		if *replicaOf == "" && strings.ToLower(cmd[0]) == "set" {
+			for _, replica := range replicaConnections {
+				_, err = replica.Write([]byte(formatRESPArray(cmd)))
+				if err != nil {
+					fmt.Printf("couldn't propogate `set` command to replica")
+				}
 			}
 		}
 	}
