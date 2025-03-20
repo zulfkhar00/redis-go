@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -112,6 +113,7 @@ func sendHandshake() error {
 	// PART 2a: send `REPLCONF listening-port <PORT>`
 	// PART 2b: send `REPLCONF capa psync2`
 	// PART 3: send `PSYNC <replicationID> <masterOffset>`
+	// PART 4: accept RDB file
 
 	// PART 1
 	parts := strings.Split(*replicaOf, " ")
@@ -121,7 +123,7 @@ func sendHandshake() error {
 	masterHost, masterPort := parts[0], parts[1]
 	masterAddr := masterHost + ":" + masterPort
 	connection, err := net.Dial("tcp", masterAddr)
-	connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	// connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err != nil {
 		return fmt.Errorf("tried to connect to master node on %s", masterAddr)
 	}
@@ -210,6 +212,16 @@ func sendHandshake() error {
 	// TODO: replicationID
 	_ = parts[1]
 
+	// PART 4
+	buf = make([]byte, 100)
+	n, err = connection.Read(buf)
+	if errors.Is(err, io.EOF) {
+		fmt.Printf("Replica read EOF form master")
+		return err
+	}
+	buf = buf[:n]
+	fmt.Printf("Replica received: %s\n", string(buf))
+
 	return nil
 }
 
@@ -269,6 +281,7 @@ func handleConnection(connection net.Conn) (err error) {
 			psync(cmd)
 			fmt.Printf("Master received: %v\n", cmd)
 			resp := fmt.Sprintf("FULLRESYNC %s %d", masterReplicationID, masterOffset)
+			fmt.Printf("Master sent: %s\n", resp)
 			buf = appendSimpleString(buf, resp)
 		default:
 			buf = appendSimpleString(buf, "ERR unknown command")
@@ -277,6 +290,20 @@ func handleConnection(connection net.Conn) (err error) {
 		_, err = connection.Write(buf)
 		if err != nil {
 			return err
+		}
+		if strings.ToLower(cmd[0]) == "psync" {
+			content, err := openRDBFile()
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return err
+			}
+			rdbMessage := append([]byte(fmt.Sprintf("$%d\r\n", len(content))), content...)
+			fmt.Printf("Master sent: %s\n", rdbMessage)
+			_, err = connection.Write(rdbMessage)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return err
+			}
 		}
 	}
 
@@ -563,6 +590,15 @@ func parseNumber(buf []byte, start int) (n, i int, err error) {
 	}
 
 	return n, i, nil
+}
+
+func openRDBFile() ([]byte, error) {
+	emptyRDB, err := hex.DecodeString("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2")
+	if err != nil {
+		return nil, err
+	}
+
+	return emptyRDB, nil
 }
 
 func readRDBFile() *ParsedRDBData {
