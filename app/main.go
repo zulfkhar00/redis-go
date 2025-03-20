@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -125,19 +126,19 @@ func sendHandshake() error {
 	}
 	masterHost, masterPort := parts[0], parts[1]
 	masterAddr := masterHost + ":" + masterPort
-	connection, err := net.Dial("tcp", masterAddr)
+	masterConn, err := net.Dial("tcp", masterAddr)
 	// connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err != nil {
 		return fmt.Errorf("tried to connect to master node on %s", masterAddr)
 	}
-	_, err = connection.Write([]byte(formatRESPArray([]string{"PING"})))
+	_, err = masterConn.Write([]byte(formatRESPArray([]string{"PING"})))
 	if err != nil {
 		return fmt.Errorf("couldn't send PING to master node")
 	}
 
 	// read response: should get PONG
 	buf := make([]byte, 30)
-	n, err := connection.Read(buf)
+	n, err := masterConn.Read(buf)
 	if errors.Is(err, io.EOF) {
 		return err
 	}
@@ -151,12 +152,12 @@ func sendHandshake() error {
 	// PART 2a
 	replConfCmds1 := []string{"REPLCONF", "listening-port", fmt.Sprint(*port)}
 	fmt.Printf("Replica sent: %v\n", replConfCmds1)
-	_, err = connection.Write([]byte(formatRESPArray(replConfCmds1)))
+	_, err = masterConn.Write([]byte(formatRESPArray(replConfCmds1)))
 	if err != nil {
 		return err
 	}
 	buf = make([]byte, 100)
-	n, err = connection.Read(buf)
+	n, err = masterConn.Read(buf)
 	if errors.Is(err, io.EOF) {
 		return err
 	}
@@ -170,12 +171,12 @@ func sendHandshake() error {
 	// PART 2b
 	replConfCmds2 := []string{"REPLCONF", "capa", "psync2"}
 	fmt.Printf("Replica sent: %v\n", replConfCmds2)
-	_, err = connection.Write([]byte(formatRESPArray(replConfCmds2)))
+	_, err = masterConn.Write([]byte(formatRESPArray(replConfCmds2)))
 	if err != nil {
 		return err
 	}
 	buf = make([]byte, 100)
-	n, err = connection.Read(buf)
+	n, err = masterConn.Read(buf)
 	if errors.Is(err, io.EOF) {
 		return err
 	}
@@ -196,12 +197,12 @@ func sendHandshake() error {
 	}
 	psyncCmds = append(psyncCmds, fmt.Sprint(masterOffset))
 	fmt.Printf("Replica sent: %v\n", psyncCmds)
-	_, err = connection.Write([]byte(formatRESPArray(psyncCmds)))
+	_, err = masterConn.Write([]byte(formatRESPArray(psyncCmds)))
 	if err != nil {
 		return err
 	}
 	buf = make([]byte, 100)
-	n, err = connection.Read(buf)
+	n, err = masterConn.Read(buf)
 	if errors.Is(err, io.EOF) {
 		return err
 	}
@@ -217,13 +218,15 @@ func sendHandshake() error {
 
 	// PART 4
 	buf = make([]byte, 100)
-	n, err = connection.Read(buf)
+	n, err = masterConn.Read(buf)
 	if errors.Is(err, io.EOF) {
 		fmt.Printf("Replica read EOF form master")
 		return err
 	}
 	buf = buf[:n]
 	fmt.Printf("Replica received: %s\n", string(buf))
+
+	go processReplicationCommands(masterConn)
 
 	return nil
 }
@@ -360,6 +363,86 @@ func handleConnection(connection net.Conn) (err error) {
 	}
 
 	return nil
+}
+
+func processReplicationCommands(masterConn net.Conn) {
+	defer masterConn.Close()
+
+	reader := bufio.NewReader(masterConn)
+	for {
+		cmd, err := readRedisCommand(reader)
+		if err != nil {
+			return
+		}
+
+		switch strings.ToLower(cmd[0]) {
+		case "set":
+			result := set(cmd)
+			fmt.Printf("Replica got %v, result: %s\n", cmd, result)
+		default:
+			fmt.Printf("Replica got unknown replication command: %v\n", cmd)
+			return
+		}
+	}
+}
+
+// readRedisCommand reads a complete Redis command from the stream
+func readRedisCommand(reader *bufio.Reader) ([]string, error) {
+	// Read the first line which should be the array marker
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	line = strings.TrimSpace(line)
+
+	// Check if this is an array
+	if !strings.HasPrefix(line, "*") {
+		return nil, fmt.Errorf("expected array, got: %s", line)
+	}
+
+	// Parse number of elements in the array
+	count, err := strconv.Atoi(line[1:])
+	if err != nil {
+		return nil, fmt.Errorf("invalid array length: %s", line[1:])
+	}
+
+	// Read each element in the command
+	cmd := make([]string, count)
+	for i := 0; i < count; i++ {
+		// Read bulk string marker
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimSpace(line)
+
+		if !strings.HasPrefix(line, "$") {
+			return nil, fmt.Errorf("expected bulk string, got: %s", line)
+		}
+
+		// Parse string length
+		strLen, err := strconv.Atoi(line[1:])
+		if err != nil {
+			return nil, fmt.Errorf("invalid string length: %s", line[1:])
+		}
+
+		// Read exactly strLen bytes
+		value := make([]byte, strLen)
+		_, err = io.ReadFull(reader, value)
+		if err != nil {
+			return nil, err
+		}
+
+		// Read the trailing \r\n
+		_, err = reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+
+		cmd[i] = string(value)
+	}
+
+	return cmd, nil
 }
 
 func set(cmd []string) string {
