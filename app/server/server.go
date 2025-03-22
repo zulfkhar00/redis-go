@@ -67,153 +67,252 @@ func (server *Server) handleConnection(connection net.Conn) (err error) {
 			return errors.New("parse command")
 		}
 
-		buf = buf[:0]
+		err = handleCommand(cmd, server, connection)
+		if err != nil {
+			fmt.Printf("%v\n", err)
+		}
+	}
 
-		switch strings.ToLower(cmd[0]) {
-		case "command":
-			buf = protocol.AppendSimpleString(buf, "")
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "ping":
-			buf = protocol.AppendSimpleString(buf, "PONG")
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "echo":
-			buf = protocol.AppendSimpleString(buf, strings.Join(cmd[1:], " "))
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "set":
-			var result string
-			if len(cmd) == 3 {
-				result = server.kvStore.Set(cmd[1], cmd[2], -1)
-			} else if len(cmd) == 5 && cmd[3] == "px" {
-				expireTimeMs, err := strconv.Atoi(cmd[4])
-				if err != nil {
-					fmt.Printf("expire time is not a number: %v\n", err)
-					continue
-				}
-				result = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
-			}
-			buf = protocol.AppendSimpleString(buf, result)
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "get":
-			if len(cmd) != 2 {
-				continue
-			}
-			result := server.kvStore.Get(cmd[1])
-			buf = []byte(protocol.FormatBulkString(result))
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "config":
-			if len(cmd) <= 2 {
-				continue
-			}
-			if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dir" {
-				buf = []byte(protocol.FormatRESPArray([]string{"dir", server.cfg.Dir}))
-			}
-			if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dbfilename" {
-				buf = []byte(protocol.FormatRESPArray([]string{"dbfilename", server.cfg.DbFileName}))
-			}
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "keys":
-			if len(cmd) != 2 {
-				continue
-			}
-			result := server.kvStore.Keys(cmd[1])
-			buf = []byte(protocol.FormatRESPArray(result))
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "info":
-			result := ""
-			if len(cmd) == 2 {
-				result = server.info(cmd[1])
-			}
-			buf = []byte(protocol.FormatBulkString(result))
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "replconf":
-			server.ReceiveReplicaConfig(cmd)
-			fmt.Printf("Master received: %v\n", cmd)
-			buf = protocol.AppendSimpleString(buf, "OK")
-			fmt.Printf("Master sent: OK\n")
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		case "psync":
-			if len(cmd) != 3 {
-				continue
-			}
-			server.Psync(cmd[1], cmd[2])
-			fmt.Printf("Master received: %v\n", cmd)
-			resp := fmt.Sprintf("FULLRESYNC %s %d", server.cfg.MasterReplID, server.cfg.MasterReplOffset)
-			fmt.Printf("Master sent: %s\n", resp)
-			buf = protocol.AppendSimpleString(buf, resp)
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		default:
-			buf = protocol.AppendSimpleString(buf, "ERR unknown command")
-			_, err = connection.Write(buf)
-			if err != nil {
-				fmt.Printf("cannot write to connection: %v\n", err)
-				continue
-			}
-		}
+	return nil
+}
 
-		if server.cfg.Role == "master" && strings.ToLower(cmd[0]) == "psync" {
-			rdbParser := db.NewRDBParser(server.cfg.Dir, server.cfg.DbFileName)
-			content, err := rdbParser.OpenRDBFile()
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				continue
-			}
-			rdbMessage := append([]byte(fmt.Sprintf("$%d\r\n", len(content))), content...)
-			fmt.Printf("Master sent: %s\n", rdbMessage)
-			_, err = connection.Write(rdbMessage)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				continue
-			}
-			replicaConnections = append(replicaConnections, connection)
+func handleCommand(cmd []string, server *Server, connection net.Conn) error {
+	switch strings.ToLower(cmd[0]) {
+	case "command":
+		err := handleCommandCommand(connection)
+		if err != nil {
+			return fmt.Errorf("handleCommandCommand error: %v", err)
 		}
-		if server.cfg.Role == "master" && strings.ToLower(cmd[0]) == "set" {
-			for _, replica := range replicaConnections {
-				_, err = replica.Write([]byte(protocol.FormatRESPArray(cmd)))
-				if err != nil {
-					fmt.Printf("couldn't propogate `set` command to replica")
-				}
+	case "ping":
+		err := handlePingCommand(connection)
+		if err != nil {
+			return fmt.Errorf("handlePingCommand error: %v", err)
+		}
+	case "echo":
+		err := handleEchoCommand(cmd, connection)
+		if err != nil {
+			return fmt.Errorf("handleEchoCommand error: %v", err)
+		}
+	case "set":
+		err := handleSetCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleSetCommand error: %v", err)
+		}
+	case "get":
+		err := handleGetCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleGetCommand error: %v", err)
+		}
+	case "config":
+		err := handleConfigCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleConfigCommand error: %v", err)
+		}
+	case "keys":
+		err := handleKeysCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleKeyCommand error: %v", err)
+		}
+	case "info":
+		err := handleInfoCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleInfoCommand error: %v\n", err)
+		}
+	case "replconf":
+		err := handleReplconfCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleReplconfCommand error: %v\n", err)
+		}
+	case "psync":
+		err := handlePsyncCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handlePsyncCommand error: %v\n", err)
+		}
+	default:
+		err := handleUnknownCommand(connection)
+		if err != nil {
+			return fmt.Errorf("handleUnknownCommand error: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+func handleCommandCommand(connection net.Conn) error {
+	var buf []byte
+	buf = protocol.AppendSimpleString(buf, "")
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+	return nil
+}
+
+func handlePingCommand(connection net.Conn) error {
+	var buf []byte
+	buf = protocol.AppendSimpleString(buf, "PONG")
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+	return nil
+}
+
+func handleEchoCommand(cmd []string, connection net.Conn) error {
+	var buf []byte
+	buf = protocol.AppendSimpleString(buf, strings.Join(cmd[1:], " "))
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+	return nil
+}
+
+func handleSetCommand(cmd []string, server *Server, connection net.Conn) error {
+	var buf []byte
+	var result string
+	if len(cmd) == 3 {
+		result = server.kvStore.Set(cmd[1], cmd[2], -1)
+	} else if len(cmd) == 5 && cmd[3] == "px" {
+		expireTimeMs, err := strconv.Atoi(cmd[4])
+		if err != nil {
+			return fmt.Errorf("expire time is not a number: %v", err)
+		}
+		result = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
+	}
+	buf = protocol.AppendSimpleString(buf, result)
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	// replicate command to replicas
+	if server.cfg.Role == "master" {
+		for _, replica := range replicaConnections {
+			_, err = replica.Write([]byte(protocol.FormatRESPArray(cmd)))
+			if err != nil {
+				fmt.Printf("couldn't propogate `set` command to replica")
 			}
 		}
+	}
+
+	return nil
+}
+
+func handleGetCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) != 2 {
+		return fmt.Errorf("expecting only 1 argument for GET")
+	}
+	result := server.kvStore.Get(cmd[1])
+	buf := []byte(protocol.FormatBulkString(result))
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleConfigCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) <= 2 {
+		return fmt.Errorf("expecting at least 1 arguemnt for CONFIG")
+	}
+	var buf []byte
+	if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dir" {
+		buf = []byte(protocol.FormatRESPArray([]string{"dir", server.cfg.Dir}))
+	}
+	if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dbfilename" {
+		buf = []byte(protocol.FormatRESPArray([]string{"dbfilename", server.cfg.DbFileName}))
+	}
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleKeysCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) != 2 {
+		return fmt.Errorf("expecting 1 argument for KEYS")
+	}
+	result := server.kvStore.Keys(cmd[1])
+	buf := []byte(protocol.FormatRESPArray(result))
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleReplconfCommand(cmd []string, server *Server, connection net.Conn) error {
+	server.ReceiveReplicaConfig(cmd)
+	fmt.Printf("Master received: %v\n", cmd)
+	var buf []byte
+	buf = protocol.AppendSimpleString(buf, "OK")
+	fmt.Printf("Master sent: OK\n")
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handlePsyncCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) != 3 {
+		return fmt.Errorf("expecting 2 arguments for PSYNC")
+	}
+	server.Psync(cmd[1], cmd[2])
+	fmt.Printf("Master received: %v\n", cmd)
+	resp := fmt.Sprintf("FULLRESYNC %s %d", server.cfg.MasterReplID, server.cfg.MasterReplOffset)
+	fmt.Printf("Master sent: %s\n", resp)
+	var buf []byte
+	buf = protocol.AppendSimpleString(buf, resp)
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	if server.cfg.Role == "master" {
+		rdbParser := db.NewRDBParser(server.cfg.Dir, server.cfg.DbFileName)
+		content, err := rdbParser.OpenRDBFile()
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		rdbMessage := append([]byte(fmt.Sprintf("$%d\r\n", len(content))), content...)
+		fmt.Printf("Master sent: %s\n", rdbMessage)
+		_, err = connection.Write(rdbMessage)
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		replicaConnections = append(replicaConnections, connection)
+	}
+
+	return nil
+}
+
+func handleUnknownCommand(connection net.Conn) error {
+	var buf []byte
+	buf = protocol.AppendSimpleString(buf, "ERR unknown command")
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleInfoCommand(cmd []string, server *Server, connection net.Conn) error {
+	result := ""
+	if len(cmd) == 2 {
+		result = server.info(cmd[1])
+	}
+	buf := []byte(protocol.FormatBulkString(result))
+	_, err := connection.Write(buf)
+	if err != nil {
+		return fmt.Errorf("cannot write to connection: %v", err)
 	}
 
 	return nil
