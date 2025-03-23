@@ -38,10 +38,6 @@ func ParseFlags() *Config {
 
 	flag.Parse()
 
-	// Set default replication values
-	cfg.MasterReplID = DefaultMasterReplID
-	cfg.MasterReplOffset = 0
-
 	return cfg
 }
 

@@ -36,21 +36,32 @@ func main() {
 	}
 
 	// Start the server
-	server := server.NewServer(cfg, kvStore)
+	if cfg.Role == "master" {
+		server := server.NewServer(cfg, kvStore)
 
-	// If replica mode is enabled, connect to master
-	if cfg.MasterHostAndPort != "" {
-		err := server.ConnectToMaster()
+		// Start the master server
+		err := server.Start()
 		if err != nil {
-			fmt.Printf("Error connecting to master: %v\n", err)
+			fmt.Printf("Error starting master server: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
-	// Start the server
-	err := server.Start()
-	if err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
-		os.Exit(1)
+	if cfg.Role == "slave" {
+		replica := server.NewReplica(cfg, kvStore)
+
+		// If replica mode is enabled, connect to master
+		err := replica.ConnectToMaster()
+		if err != nil {
+			fmt.Printf("Error connecting to master: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Start the replica server
+		err = replica.Start()
+		if err != nil {
+			fmt.Printf("Error starting replica server: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
