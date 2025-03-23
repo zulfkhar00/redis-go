@@ -28,7 +28,6 @@ func NewReplica(cfg *config.Config, kvStore *db.Store) *Replica {
 }
 
 func (server *Replica) Start() error {
-	server.cfg.MasterReplOffset = 0
 	// server logic
 	l, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(server.cfg.Port))
 	if err != nil {
@@ -286,15 +285,14 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 	}
 
 	// read response: should get PONG
-	buf := make([]byte, 30)
-	n, err := masterConn.Read(buf)
+	reader := bufio.NewReader(masterConn)
+	pongLine, err := reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
 		return nil, err
 	}
-	buf = buf[:n]
-	resp := strings.TrimSpace(string(buf))
-	if resp != "+PONG" {
-		return nil, fmt.Errorf("unexpected response, at PART1: %s", resp)
+	pongLine = strings.TrimSpace(pongLine)
+	if pongLine != "+PONG" {
+		return nil, fmt.Errorf("unexpected response, at PART1: %s", pongLine)
 	}
 
 	// PART 2a
@@ -304,15 +302,13 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf = make([]byte, 100)
-	n, err = masterConn.Read(buf)
+	okLine, err := reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
 		return nil, err
 	}
-	buf = buf[:n]
-	resp = strings.TrimSpace(string(buf))
-	if resp != "+OK" {
-		return nil, fmt.Errorf("unexpected response, at PART2a: %s", resp)
+	okLine = strings.TrimSpace(okLine)
+	if okLine != "+OK" {
+		return nil, fmt.Errorf("unexpected response, at PART2a: %s", okLine)
 	}
 
 	// PART 2b
@@ -321,15 +317,14 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf = make([]byte, 100)
-	n, err = masterConn.Read(buf)
+
+	okLine, err = reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
 		return nil, err
 	}
-	buf = buf[:n]
-	resp = strings.TrimSpace(string(buf))
-	if resp != "+OK" {
-		return nil, fmt.Errorf("unexpected response, at PART2b: %s", resp)
+	okLine = strings.TrimSpace(okLine)
+	if okLine != "+OK" {
+		return nil, fmt.Errorf("unexpected response, at PART2b: %s", okLine)
 	}
 
 	// PART 3
@@ -346,7 +341,7 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	reader := bufio.NewReader(masterConn)
+
 	fullSyncLine, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, fmt.Errorf("failed to read FULLRESYNC: %v", err)
@@ -375,16 +370,19 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 		return nil, fmt.Errorf("invalid RDB size: %s", rdbSizeLine[1:])
 	}
 	rdbData := make([]byte, rdbSize)
-	_, err = io.ReadFull(reader, rdbData)
+	_, err = reader.Read(rdbData)
+	// _, err = io.ReadFull(reader, rdbData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read RDB data: %v", err)
 	}
+	fmt.Printf("Received RDB file: %q\n", rdbData)
 
 	return masterConn, nil
 }
 
 func (server *Replica) processReplicationCommands(masterConn net.Conn) {
 	defer masterConn.Close()
+	server.cfg.MasterReplOffset = 0
 
 	reader := bufio.NewReader(masterConn)
 	fmt.Printf("Replica: Starting to process replication commands\n")
@@ -395,6 +393,7 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn) {
 			fmt.Printf("[masterConnection] ReadRedisCommand err: %v\n", err)
 			return
 		}
+
 		fmt.Printf("replication received: %v\n", cmd)
 
 		if len(cmd) == 0 {
@@ -402,6 +401,11 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn) {
 		}
 
 		switch strings.ToLower(cmd[0]) {
+		case "ping":
+			err := handlePingReplicaCommand(masterConn)
+			if err != nil {
+				fmt.Printf("handlePingReplicaCommand error: %v\n", err)
+			}
 		case "set":
 			var result string
 			if len(cmd) == 3 {

@@ -305,7 +305,7 @@ func handlePsyncCommand(cmd []string, server *Server, connection net.Conn) error
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
 	rdbMessage := append([]byte(fmt.Sprintf("$%d\r\n", len(content))), content...)
-	fmt.Printf("Master sent: %s\n", rdbMessage)
+	fmt.Printf("Master sent: %q\n", rdbMessage)
 	_, err = connection.Write(rdbMessage)
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
