@@ -108,3 +108,8 @@ func (s *Store) LoadFromRDB(parsedRDBData *ParsedRDBData) {
 		}
 	}
 }
+
+// Length returns number of unique entries
+func (s *Store) Length() int {
+	return len(s.data)
+}

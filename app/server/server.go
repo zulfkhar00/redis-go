@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/app/config"
 	"github.com/codecrafters-io/redis-starter-go/app/db"
@@ -20,6 +21,8 @@ type Server struct {
 }
 
 var replicaConnections []net.Conn
+var ackChan = make(chan bool)
+var isWaiting = false
 
 func NewServer(cfg *config.Config, kvStore *db.Store) *Server {
 	return &Server{
@@ -274,7 +277,9 @@ func handleReplconfCommand(cmd []string, server *Server, connection net.Conn) er
 		if err != nil {
 			return fmt.Errorf("REPLCONF ACK <offset>: offset is not a number")
 		}
-		// TODO: process or save offset
+		if isWaiting {
+			ackChan <- true
+		}
 		return nil
 	}
 
@@ -320,20 +325,58 @@ func handlePsyncCommand(cmd []string, server *Server, connection net.Conn) error
 	return nil
 }
 
-func handleWaitCommand(cmd []string, _ *Server, connection net.Conn) error {
+func handleWaitCommand(cmd []string, server *Server, connection net.Conn) error {
 	if len(cmd) != 3 {
 		return fmt.Errorf("supposed to get WAIT <replica_count> <timeout>, but got: %v", cmd)
 	}
-	_, err := strconv.Atoi(cmd[1]) // replicaCount
+	replicaCount, err := strconv.Atoi(cmd[1]) // replicaCount
 	if err != nil {
 		return fmt.Errorf("WAIT <replica_count> should be number, but got: %s", cmd[1])
 	}
-	_, err = strconv.Atoi(cmd[2]) // timeoutMs
+	timeoutMs, err := strconv.Atoi(cmd[2]) // timeoutMs
 	if err != nil {
 		return fmt.Errorf("WAIT <timeout> should be number, but got: %s", cmd[2])
 	}
 
-	_, err = connection.Write([]byte(protocol.FormatRESPInt(int64(len(replicaConnections)))))
+	if server.kvStore.Length() == 0 {
+		_, err = connection.Write([]byte(protocol.FormatRESPInt(int64(len(replicaConnections)))))
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		return nil
+	}
+
+	isWaiting = true
+	// err = handleReplconfCommand([]string{"REPLCONF", "GETACK", "*"}, server, connection)
+	for _, replica := range replicaConnections {
+		go func() {
+			_, err = replica.Write([]byte(protocol.FormatRESPArray([]string{"REPLCONF", "GETACK", "*"})))
+			if err != nil {
+				fmt.Printf("[master->replica] error writing to connection: %v\n", err)
+			}
+		}()
+	}
+	if err != nil {
+		fmt.Printf("[handleWaitCommand] handleReplconfCommand error: %v\n", err)
+	}
+	timer := time.After(time.Duration(timeoutMs) * time.Millisecond)
+	ackReceived := 0
+	done := false
+	for !done {
+		select {
+		case <-ackChan:
+			ackReceived++
+			fmt.Printf("ack received: %d\n", ackReceived)
+			if ackReceived >= replicaCount {
+				done = true
+			}
+		case <-timer:
+			fmt.Printf("timeout\n")
+			done = true
+		}
+	}
+	isWaiting = false
+	_, err = connection.Write([]byte(protocol.FormatRESPInt(int64(ackReceived))))
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
