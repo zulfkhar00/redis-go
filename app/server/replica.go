@@ -385,7 +385,7 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 	fmt.Printf("Replica: Starting to process replication commands\n")
 	for {
 		fmt.Printf("Replica: Waiting for next command from master...\n")
-		cmd, err := protocol.ReadRedisCommand(reader)
+		cmd, bytesProcessed, err := protocol.ReadRedisCommand(reader)
 		if err != nil {
 			fmt.Printf("[replication conn] ReadRedisCommand err: %v\n", err)
 			return
@@ -394,13 +394,11 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 		if len(cmd) == 0 {
 			continue
 		}
+		fmt.Printf("[replication conn] received cmd: %v\n", cmd)
 
 		switch strings.ToLower(cmd[0]) {
 		case "ping":
-			err := handlePingReplicaCommand(masterConn)
-			if err != nil {
-				fmt.Printf("handlePingReplicaCommand error: %v\n", err)
-			}
+			// master alive
 		case "set":
 			var result string
 			if len(cmd) == 3 {
@@ -413,21 +411,20 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 				result = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
 			}
 			fmt.Printf("Replica got %v, result: %s\n", cmd, result)
-			server.cfg.MasterReplOffset += 1
 		case "replconf":
 			if len(cmd) >= 3 && strings.ToLower(cmd[1]) == "getack" {
 				ackCmd := []string{"REPLCONF", "ACK", fmt.Sprintf("%d", server.cfg.MasterReplOffset)}
 				respData := protocol.FormatRESPArray(ackCmd)
-				n, err := masterConn.Write([]byte(respData))
+				_, err := masterConn.Write([]byte(respData))
 				if err != nil {
 					fmt.Printf("Replica: Error sending ACK: %v\n", err)
-				} else {
-					fmt.Printf("Replica: Successfully wrote %d bytes for ACK\n", n)
 				}
+				fmt.Printf("[replication conn] sent: %q\n", []byte(respData))
 			}
 		default:
 			fmt.Printf("Replica got unknown replication command: %v\n", cmd)
 		}
+		server.cfg.MasterReplOffset += bytesProcessed
 	}
 }
 

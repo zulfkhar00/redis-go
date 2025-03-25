@@ -90,23 +90,25 @@ func ParseCommand(buf []byte) ([]string, error) {
 }
 
 // ReadRedisCommand reads a complete Redis command from a bufio.Reader
-func ReadRedisCommand(reader *bufio.Reader) ([]string, error) {
+func ReadRedisCommand(reader *bufio.Reader) ([]string, int, error) {
+	bytesProcessed := 0
 	// Read the first line which should be the array marker
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	bytesProcessed += len(line)
 	line = strings.TrimSpace(line)
 
 	// Check if this is an array
 	if !strings.HasPrefix(line, "*") {
-		return nil, fmt.Errorf("expected array, got: %s", line)
+		return nil, 0, fmt.Errorf("expected array, got: %s", line)
 	}
 
 	// Parse number of elements in the array
 	count, err := strconv.Atoi(line[1:])
 	if err != nil {
-		return nil, fmt.Errorf("invalid array length: %s", line[1:])
+		return nil, 0, fmt.Errorf("invalid array length: %s", line[1:])
 	}
 
 	// Read each element in the command
@@ -115,37 +117,40 @@ func ReadRedisCommand(reader *bufio.Reader) ([]string, error) {
 		// Read bulk string marker
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		bytesProcessed += len(line)
 		line = strings.TrimSpace(line)
 
 		if !strings.HasPrefix(line, "$") {
-			return nil, fmt.Errorf("expected bulk string, got: %s", line)
+			return nil, 0, fmt.Errorf("expected bulk string, got: %s", line)
 		}
 
 		// Parse string length
 		strLen, err := strconv.Atoi(line[1:])
 		if err != nil {
-			return nil, fmt.Errorf("invalid string length: %s", line[1:])
+			return nil, 0, fmt.Errorf("invalid string length: %s", line[1:])
 		}
 
 		// Read exactly strLen bytes
 		value := make([]byte, strLen)
-		_, err = io.ReadFull(reader, value)
+		n, err := io.ReadFull(reader, value)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		bytesProcessed += n
 
 		// Read the trailing \r\n
-		_, err = reader.ReadString('\n')
+		trainlingLine, err := reader.ReadString('\n')
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		bytesProcessed += len(trainlingLine)
 
 		cmd[i] = string(value)
 	}
 
-	return cmd, nil
+	return cmd, bytesProcessed, nil
 }
 
 // Helper functions for parsing RESP protocol
