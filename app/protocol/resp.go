@@ -52,6 +52,11 @@ func FormatRESPArray(elems []string) string {
 	return resp
 }
 
+// FormatRESPArray formats a integer as a RESP integer
+func FormatRESPInt(number int64) string {
+	return fmt.Sprintf(":%d\r\n", number)
+}
+
 // AppendSimpleString appends a RESP simple string to a byte slice
 func AppendSimpleString(buf []byte, str string) []byte {
 	return fmt.Appendf(buf, "+%s\r\n", str)

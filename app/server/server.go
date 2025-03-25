@@ -126,6 +126,11 @@ func handleCommand(cmd []string, server *Server, connection net.Conn) error {
 		if err != nil {
 			return fmt.Errorf("handlePsyncCommand error: %v", err)
 		}
+	case "wait":
+		err := handleWaitCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleWaitCommand error: %v", err)
+		}
 	default:
 		err := handleUnknownCommand(connection)
 		if err != nil {
@@ -311,6 +316,27 @@ func handlePsyncCommand(cmd []string, server *Server, connection net.Conn) error
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
 	replicaConnections = append(replicaConnections, connection)
+
+	return nil
+}
+
+func handleWaitCommand(cmd []string, _ *Server, connection net.Conn) error {
+	if len(cmd) != 3 {
+		return fmt.Errorf("supposed to get WAIT <replica_count> <timeout>, but got: %v", cmd)
+	}
+	_, err := strconv.Atoi(cmd[1]) // replicaCount
+	if err != nil {
+		return fmt.Errorf("WAIT <replica_count> should be number, but got: %s", cmd[1])
+	}
+	_, err = strconv.Atoi(cmd[2]) // timeoutMs
+	if err != nil {
+		return fmt.Errorf("WAIT <timeout> should be number, but got: %s", cmd[2])
+	}
+
+	_, err = connection.Write([]byte(protocol.FormatRESPInt(0)))
+	if err != nil {
+		return fmt.Errorf("error writing to connection: %v", err)
+	}
 
 	return nil
 }
