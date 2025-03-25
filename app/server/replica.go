@@ -249,17 +249,17 @@ func handleInfoReplicaCommand(cmd []string, server *Replica, connection net.Conn
 }
 
 func (server *Replica) ConnectToMaster() error {
-	masterConn, err := server.sendHandshake()
+	masterConn, reader, err := server.sendHandshake()
 	if err != nil {
 		fmt.Printf("Error sending handshake to master: %v\n", err)
 		return err
 	}
-	go server.processReplicationCommands(masterConn)
+	go server.processReplicationCommands(masterConn, reader)
 
 	return nil
 }
 
-func (server *Replica) sendHandshake() (net.Conn, error) {
+func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 	// HANDSHAKE:
 	// PART 1: send `PING to master`
 	// PART 2a: send `REPLCONF listening-port <PORT>`
@@ -275,56 +275,55 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 	masterHost, masterPort := parts[0], parts[1]
 	masterAddr := masterHost + ":" + masterPort
 	masterConn, err := net.Dial("tcp", masterAddr)
+	reader := bufio.NewReader(masterConn)
 	// connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err != nil {
-		return nil, fmt.Errorf("tried to connect to master node on %s", masterAddr)
+		return nil, nil, fmt.Errorf("tried to connect to master node on %s", masterAddr)
 	}
 	_, err = masterConn.Write([]byte(protocol.FormatRESPArray([]string{"PING"})))
 	if err != nil {
-		return nil, fmt.Errorf("couldn't send PING to master node")
+		return nil, nil, fmt.Errorf("couldn't send PING to master node")
 	}
 
 	// read response: should get PONG
-	reader := bufio.NewReader(masterConn)
 	pongLine, err := reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
-		return nil, err
+		return nil, nil, err
 	}
 	pongLine = strings.TrimSpace(pongLine)
 	if pongLine != "+PONG" {
-		return nil, fmt.Errorf("unexpected response, at PART1: %s", pongLine)
+		return nil, nil, fmt.Errorf("unexpected response, at PART1: %s", pongLine)
 	}
 
 	// PART 2a
 	replConfCmds1 := []string{"REPLCONF", "listening-port", fmt.Sprint(server.cfg.Port)}
-	fmt.Printf("Replica sent: %v\n", replConfCmds1)
 	_, err = masterConn.Write([]byte(protocol.FormatRESPArray(replConfCmds1)))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	okLine, err := reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
-		return nil, err
+		return nil, nil, err
 	}
 	okLine = strings.TrimSpace(okLine)
 	if okLine != "+OK" {
-		return nil, fmt.Errorf("unexpected response, at PART2a: %s", okLine)
+		return nil, nil, fmt.Errorf("unexpected response, at PART2a: %s", okLine)
 	}
 
 	// PART 2b
 	replConfCmds2 := []string{"REPLCONF", "capa", "psync2"}
 	_, err = masterConn.Write([]byte(protocol.FormatRESPArray(replConfCmds2)))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	okLine, err = reader.ReadString('\n')
 	if errors.Is(err, io.EOF) {
-		return nil, err
+		return nil, nil, err
 	}
 	okLine = strings.TrimSpace(okLine)
 	if okLine != "+OK" {
-		return nil, fmt.Errorf("unexpected response, at PART2b: %s", okLine)
+		return nil, nil, fmt.Errorf("unexpected response, at PART2b: %s", okLine)
 	}
 
 	// PART 3
@@ -336,65 +335,61 @@ func (server *Replica) sendHandshake() (net.Conn, error) {
 		psyncCmds = append(psyncCmds, fmt.Sprint(server.cfg.MasterReplID))
 	}
 	psyncCmds = append(psyncCmds, fmt.Sprint(server.cfg.MasterReplOffset))
-	fmt.Printf("Replica sent: %v\n", psyncCmds)
 	_, err = masterConn.Write([]byte(protocol.FormatRESPArray(psyncCmds)))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	fullSyncLine, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("failed to read FULLRESYNC: %v", err)
+		return nil, nil, fmt.Errorf("failed to read FULLRESYNC: %v", err)
 	}
 	fullSyncLine = strings.TrimSpace(fullSyncLine)
 	if !strings.HasPrefix(fullSyncLine, "+FULLRESYNC") {
-		return nil, fmt.Errorf("expected FULLRESYNC, got: %s", fullSyncLine)
+		return nil, nil, fmt.Errorf("expected FULLRESYNC, got: %s", fullSyncLine)
 	}
 	parts = strings.Split(fullSyncLine, " ")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid FULLRESYNC format: %s", fullSyncLine)
+		return nil, nil, fmt.Errorf("invalid FULLRESYNC format: %s", fullSyncLine)
 	}
 	server.cfg.MasterReplID = parts[1] // Store the replication ID
 
 	// PART 4
 	rdbSizeLine, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("failed to read RDB size: %v", err)
+		return nil, nil, fmt.Errorf("failed to read RDB size: %v", err)
 	}
 	rdbSizeLine = strings.TrimSpace(rdbSizeLine)
 	if !strings.HasPrefix(rdbSizeLine, "$") {
-		return nil, fmt.Errorf("expected RDB size marker ($), got: %s", rdbSizeLine)
+		return nil, nil, fmt.Errorf("expected RDB size marker ($), got: %s", rdbSizeLine)
 	}
 	rdbSize, err := strconv.Atoi(rdbSizeLine[1:])
 	if err != nil {
-		return nil, fmt.Errorf("invalid RDB size: %s", rdbSizeLine[1:])
+		return nil, nil, fmt.Errorf("invalid RDB size: %s", rdbSizeLine[1:])
 	}
 	rdbData := make([]byte, rdbSize)
 	_, err = reader.Read(rdbData)
 	// _, err = io.ReadFull(reader, rdbData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read RDB data: %v", err)
+		return nil, nil, fmt.Errorf("failed to read RDB data: %v", err)
 	}
 	fmt.Printf("Received RDB file: %q\n", rdbData)
 
-	return masterConn, nil
+	return masterConn, reader, nil
 }
 
-func (server *Replica) processReplicationCommands(masterConn net.Conn) {
+func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *bufio.Reader) {
 	defer masterConn.Close()
 	server.cfg.MasterReplOffset = 0
 
-	reader := bufio.NewReader(masterConn)
 	fmt.Printf("Replica: Starting to process replication commands\n")
 	for {
 		fmt.Printf("Replica: Waiting for next command from master...\n")
 		cmd, err := protocol.ReadRedisCommand(reader)
 		if err != nil {
-			fmt.Printf("[masterConnection] ReadRedisCommand err: %v\n", err)
+			fmt.Printf("[replication conn] ReadRedisCommand err: %v\n", err)
 			return
 		}
-
-		fmt.Printf("replication received: %v\n", cmd)
 
 		if len(cmd) == 0 {
 			continue
@@ -420,12 +415,9 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn) {
 			fmt.Printf("Replica got %v, result: %s\n", cmd, result)
 			server.cfg.MasterReplOffset += 1
 		case "replconf":
-			fmt.Printf("Replica: Processing REPLCONF command: %v\n", cmd)
 			if len(cmd) >= 3 && strings.ToLower(cmd[1]) == "getack" {
-				fmt.Printf("Replica: Processing GETACK subcommand\n")
 				ackCmd := []string{"REPLCONF", "ACK", fmt.Sprintf("%d", server.cfg.MasterReplOffset)}
 				respData := protocol.FormatRESPArray(ackCmd)
-				fmt.Printf("Replica: Sending ACK response: %q\n", respData)
 				n, err := masterConn.Write([]byte(respData))
 				if err != nil {
 					fmt.Printf("Replica: Error sending ACK: %v\n", err)
