@@ -333,7 +333,7 @@ func handleWaitCommand(cmd []string, _ *Server, connection net.Conn) error {
 		return fmt.Errorf("WAIT <timeout> should be number, but got: %s", cmd[2])
 	}
 
-	_, err = connection.Write([]byte(protocol.FormatRESPInt(0)))
+	_, err = connection.Write([]byte(protocol.FormatRESPInt(int64(len(replicaConnections)))))
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
