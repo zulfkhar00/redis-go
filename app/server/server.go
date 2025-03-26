@@ -134,6 +134,11 @@ func handleCommand(cmd []string, server *Server, connection net.Conn) error {
 		if err != nil {
 			return fmt.Errorf("handleWaitCommand error: %v", err)
 		}
+	case "type":
+		err := handleTypeCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleTypeCommand error: %v", err)
+		}
 	default:
 		err := handleUnknownCommand(connection)
 		if err != nil {
@@ -377,6 +382,25 @@ func handleWaitCommand(cmd []string, server *Server, connection net.Conn) error 
 	}
 	isWaiting = false
 	_, err = connection.Write([]byte(protocol.FormatRESPInt(int64(ackReceived))))
+	if err != nil {
+		return fmt.Errorf("error writing to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleTypeCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) != 2 {
+		return fmt.Errorf("expecting 1 argument for TYPE")
+	}
+	key := cmd[1]
+	res := "none"
+	if val := server.kvStore.Get(key); val != "" {
+		res = "string"
+	}
+
+	var buf []byte
+	_, err := connection.Write([]byte(protocol.AppendSimpleString(buf, res)))
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
