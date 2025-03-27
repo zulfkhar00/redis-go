@@ -9,3 +9,5 @@
 module github.com/codecrafters-io/redis-starter-go
 
 go 1.24.0
+
+require github.com/plar/go-adaptive-radix-tree/v2 v2.0.3 // indirect
