@@ -62,6 +62,11 @@ func AppendSimpleString(buf []byte, str string) []byte {
 	return fmt.Appendf(buf, "+%s\r\n", str)
 }
 
+// FormatRESPError formats error as a RESP error
+func FormatRESPError(err error) string {
+	return fmt.Sprintf("-ERR %s\r\n", err.Error())
+}
+
 // ParseCommand parses a RESP command from a byte slice
 func ParseCommand(buf []byte) ([]string, error) {
 	i := 0

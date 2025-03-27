@@ -41,8 +41,10 @@ type RedisStream struct {
 }
 
 type StreamEntry struct {
-	fields map[string]string
-	size   int64
+	idTimestamp uint64
+	idSequence  uint64
+	fields      map[string]string
+	size        int64
 }
 
 // KeyValue represents a value with an optional expiration time
@@ -88,28 +90,40 @@ func (s *Store) Set(key string, val interface{}, expireMS int) string {
 	return "OK"
 }
 
-func (s *Store) SetStream(key, entryKey string, fields map[string]string) string {
+func (s *Store) SetStream(key string, idTimestamp, idSequence int64, fields map[string]string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if idTimestamp < 0 || (idTimestamp == 0 && idSequence < 1) {
+		return "", fmt.Errorf("The ID specified in XADD must be greater than 0-0")
+	}
+
+	entryKey := fmt.Sprintf("%d-%d", idTimestamp, idSequence)
 	oldVal, exists := s.data[key]
 	if !exists {
 		entries := art.New()
-		entry := StreamEntry{fields: fields, size: int64(len(fields))}
+		entry := StreamEntry{idTimestamp: uint64(idTimestamp), idSequence: uint64(idSequence), fields: fields, size: int64(len(fields))}
 		entries.Insert(art.Key(entryKey), art.Value(entry))
-
-		stream := RedisStream{entries: entries, size: 0, lastEntry: nil}
+		stream := &RedisStream{entries: entries, size: 0, lastEntry: &entry}
 		s.data[key] = KeyValue{ValueType: StreamType, Value: stream, ExpireTime: "-1"}
 	} else {
 		stream, ok := oldVal.Value.(*RedisStream)
 		if !ok {
 			panic(fmt.Errorf("[SetStream] s.data[%q] is not a *RedisStream, it is %s", key, oldVal.ValueType.ToString()))
 		}
-		entry := StreamEntry{fields: fields, size: int64(len(fields))}
+		lastEntryIDTimestamp, lastEntryIDSequence := stream.lastEntry.idTimestamp, stream.lastEntry.idSequence
+		if idTimestamp < int64(lastEntryIDTimestamp) {
+			return "", fmt.Errorf("The ID specified in XADD is equal or smaller than the target stream top item")
+		}
+		if idTimestamp == int64(lastEntryIDTimestamp) && idSequence <= int64(lastEntryIDSequence) {
+			return "", fmt.Errorf("The ID specified in XADD is equal or smaller than the target stream top item")
+		}
+		entry := StreamEntry{idTimestamp: uint64(idTimestamp), idSequence: uint64(idSequence), fields: fields, size: int64(len(fields))}
 		stream.entries.Insert(art.Key(entryKey), art.Value(entry))
+		stream.lastEntry = &entry
 	}
 
-	return entryKey
+	return entryKey, nil
 }
 
 // Get gets a value for a key, considering expiration

@@ -425,9 +425,26 @@ func handleXaddCommand(cmd []string, server *Server, connection net.Conn) error 
 		key, val := cmd[i], cmd[i+1]
 		fields[key] = val
 	}
-	res := server.kvStore.SetStream(cmd[1], cmd[2], fields)
+	entryIDParts := strings.Split(cmd[2], "-")
+	idTimestampStr, idSequenceStr := entryIDParts[0], entryIDParts[1]
+	idTimestamp, err := strconv.Atoi(idTimestampStr)
+	if err != nil {
+		return fmt.Errorf("entryIDTimestamp is not a number, it's %s, err: %v", idTimestampStr, err)
+	}
+	idSequence, err := strconv.Atoi(idSequenceStr)
+	if err != nil {
+		return fmt.Errorf("entryIDSequence is not a number, it's %s, err: %v", idSequenceStr, err)
+	}
+	res, err := server.kvStore.SetStream(cmd[1], int64(idTimestamp), int64(idSequence), fields)
+	if err != nil {
+		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		return nil
+	}
 
-	_, err := connection.Write([]byte(protocol.FormatBulkString(res)))
+	_, err = connection.Write([]byte(protocol.FormatBulkString(res)))
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
 	}

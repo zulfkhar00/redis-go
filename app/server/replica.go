@@ -376,7 +376,6 @@ func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read RDB data: %v", err)
 	}
-	fmt.Printf("Received RDB file: %q\n", rdbData)
 
 	return masterConn, reader, nil
 }
@@ -397,7 +396,7 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 		if len(cmd) == 0 {
 			continue
 		}
-		fmt.Printf("[replication conn] received cmd: %v\n", cmd)
+		// fmt.Printf("[replication conn] received cmd: %v\n", cmd)
 
 		switch strings.ToLower(cmd[0]) {
 		case "ping":
