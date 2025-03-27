@@ -403,17 +403,15 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 		case "ping":
 			// master alive
 		case "set":
-			var result string
 			if len(cmd) == 3 {
-				result = server.kvStore.Set(cmd[1], cmd[2], -1)
+				_ = server.kvStore.Set(cmd[1], cmd[2], -1)
 			} else if len(cmd) == 4 {
 				expireTimeMs, err := strconv.Atoi(cmd[3])
 				if err != nil {
 					fmt.Printf("expire time is not a number")
 				}
-				result = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
+				_ = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
 			}
-			fmt.Printf("Replica got %v, result: %s\n", cmd, result)
 		case "replconf":
 			if len(cmd) >= 3 && strings.ToLower(cmd[1]) == "getack" {
 				ackCmd := []string{"REPLCONF", "ACK", fmt.Sprintf("%d", server.cfg.MasterReplOffset)}
