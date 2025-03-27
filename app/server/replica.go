@@ -181,7 +181,10 @@ func handleGetReplicaCommand(cmd []string, server *Replica, connection net.Conn)
 		return fmt.Errorf("expecting only 1 argument for GET")
 	}
 	result := server.kvStore.Get(cmd[1])
-	buf := []byte(protocol.FormatBulkString(result))
+	buf := []byte("")
+	if result != nil && result.ValueType != db.StreamType {
+		buf = []byte(protocol.FormatBulkString(result.ToString()))
+	}
 	_, err := connection.Write(buf)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %v", err)

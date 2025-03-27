@@ -139,6 +139,11 @@ func handleCommand(cmd []string, server *Server, connection net.Conn) error {
 		if err != nil {
 			return fmt.Errorf("handleTypeCommand error: %v", err)
 		}
+	case "xadd":
+		err := handleXaddCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleXaddCommand error: %v", err)
+		}
 	default:
 		err := handleUnknownCommand(connection)
 		if err != nil {
@@ -213,7 +218,10 @@ func handleGetCommand(cmd []string, server *Server, connection net.Conn) error {
 		return fmt.Errorf("expecting only 1 argument for GET")
 	}
 	result := server.kvStore.Get(cmd[1])
-	buf := []byte(protocol.FormatBulkString(result))
+	buf := []byte(protocol.FormatBulkString(""))
+	if result != nil && result.ValueType != db.StreamType {
+		buf = []byte(protocol.FormatBulkString(result.ToString()))
+	}
 	_, err := connection.Write(buf)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %v", err)
@@ -395,12 +403,31 @@ func handleTypeCommand(cmd []string, server *Server, connection net.Conn) error 
 	}
 	key := cmd[1]
 	res := "none"
-	if val := server.kvStore.Get(key); val != "" {
-		res = "string"
+	if val := server.kvStore.Get(key); val != nil {
+		res = val.ValueType.ToString()
 	}
 
 	var buf []byte
 	_, err := connection.Write([]byte(protocol.AppendSimpleString(buf, res)))
+	if err != nil {
+		return fmt.Errorf("error writing to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleXaddCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) < 5 {
+		return fmt.Errorf("expecting at least 5 arguments for XADD: XADD <stream_key> <entryID> <key> <val>")
+	}
+	fields := make(map[string]string)
+	for i := 3; i < len(cmd)-1; i++ {
+		key, val := cmd[i], cmd[i+1]
+		fields[key] = val
+	}
+	res := server.kvStore.SetStream(cmd[1], cmd[2], fields)
+
+	_, err := connection.Write([]byte(protocol.FormatBulkString(res)))
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
