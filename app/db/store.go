@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/app/utils"
@@ -67,7 +66,6 @@ func (val *KeyValue) ToString() string {
 // Store represents the key-value store
 type Store struct {
 	data map[string]KeyValue
-	mu   sync.RWMutex
 }
 
 func NewStore() *Store {
@@ -77,27 +75,33 @@ func NewStore() *Store {
 }
 
 func (s *Store) Set(key string, val interface{}, expireMS int) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// Check if expiration time is provided
 	valType := getDataType(val)
+	var expireTimeMs string
 	if expireMS < 0 {
-		s.data[key] = KeyValue{ValueType: valType, Value: val, ExpireTime: "-1"}
+		expireTimeMs = "-1"
 	} else {
-		expireTime := time.Now().Add(time.Duration(expireMS) * time.Millisecond)
-		s.data[key] = KeyValue{ValueType: valType, Value: val, ExpireTime: utils.MillisecondsSince1970(expireTime)}
+		future := time.Now().Add(time.Duration(expireMS) * time.Millisecond)
+		expireTimeMs = utils.MillisecondsSince1970(future)
 	}
+
+	s.data[key] = KeyValue{ValueType: valType, Value: val, ExpireTime: expireTimeMs}
 
 	return "OK"
 }
 
 func (s *Store) SetStream(key, entryID string, fields map[string]string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var idTimestampStr, idSequenceStr string
+	if entryID == "*" {
+		idTimestampStr = fmt.Sprintf("%d", time.Now().UnixMilli())
+		idSequenceStr = "0"
+	} else {
+		entryIDParts := strings.Split(entryID, "-")
+		idTimestampStr, idSequenceStr = entryIDParts[0], entryIDParts[1]
+	}
 
-	entryIDParts := strings.Split(entryID, "-")
-	idTimestampStr, idSequenceStr := entryIDParts[0], entryIDParts[1]
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
 
 	entryKey := ""
 	oldVal, exists := s.data[key]
@@ -206,8 +210,8 @@ func validateEntryID(idTimestamp, idSequence int, lastStreamEntry *StreamEntry) 
 
 // Get gets a value for a key, considering expiration
 func (s *Store) Get(key string) *KeyValue {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// s.mu.RLock()
+	// defer s.mu.RUnlock()
 
 	valObj, ok := s.data[key]
 
@@ -227,8 +231,8 @@ func (s *Store) Get(key string) *KeyValue {
 
 // Keys returns all keys matching a pattern
 func (s *Store) Keys(pattern string) []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// s.mu.RLock()
+	// defer s.mu.RUnlock()
 
 	requestedKeys := make([]string, 0)
 
@@ -244,8 +248,8 @@ func (s *Store) Keys(pattern string) []string {
 
 // LoadFromRDB loads data from a parsed RDB file
 func (s *Store) LoadFromRDB(parsedRDBData *ParsedRDBData) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
 
 	// Clear existing data
 	s.data = make(map[string]KeyValue)
