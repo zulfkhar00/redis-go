@@ -1,9 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strconv"
@@ -54,27 +54,28 @@ func (server *Server) Start() error {
 
 func (server *Server) handleConnection(connection net.Conn) (err error) {
 	defer connection.Close()
+
+	reader := bufio.NewReader(connection)
 	for {
-		buf := make([]byte, 1024)
-		n, err := connection.Read(buf)
-		if errors.Is(err, io.EOF) {
-			break
-		}
+		// buf := make([]byte, 1024)
+		// n, err := connection.Read(buf)
+		// if errors.Is(err, io.EOF) {
+		// 	break
+		// }
 
-		buf = buf[:n]
+		// buf = buf[:n]
 
-		cmd, err := protocol.ParseCommand(buf)
+		cmd, _, err := protocol.ReadRedisCommand(reader)
 		if err != nil {
 			return errors.New("parse command")
 		}
+		fmt.Printf("[master] received cmd: %v\n", cmd)
 
 		err = handleCommand(cmd, server, connection)
 		if err != nil {
 			fmt.Printf("%v\n", err)
 		}
 	}
-
-	return nil
 }
 
 func handleCommand(cmd []string, server *Server, connection net.Conn) error {
@@ -425,17 +426,7 @@ func handleXaddCommand(cmd []string, server *Server, connection net.Conn) error 
 		key, val := cmd[i], cmd[i+1]
 		fields[key] = val
 	}
-	entryIDParts := strings.Split(cmd[2], "-")
-	idTimestampStr, idSequenceStr := entryIDParts[0], entryIDParts[1]
-	idTimestamp, err := strconv.Atoi(idTimestampStr)
-	if err != nil {
-		return fmt.Errorf("entryIDTimestamp is not a number, it's %s, err: %v", idTimestampStr, err)
-	}
-	idSequence, err := strconv.Atoi(idSequenceStr)
-	if err != nil {
-		return fmt.Errorf("entryIDSequence is not a number, it's %s, err: %v", idSequenceStr, err)
-	}
-	res, err := server.kvStore.SetStream(cmd[1], int64(idTimestamp), int64(idSequence), fields)
+	res, err := server.kvStore.SetStream(cmd[1], cmd[2], fields)
 	if err != nil {
 		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
 		if err != nil {

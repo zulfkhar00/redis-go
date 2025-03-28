@@ -2,6 +2,8 @@ package db
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,17 +92,22 @@ func (s *Store) Set(key string, val interface{}, expireMS int) string {
 	return "OK"
 }
 
-func (s *Store) SetStream(key string, idTimestamp, idSequence int64, fields map[string]string) (string, error) {
+func (s *Store) SetStream(key, entryID string, fields map[string]string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if idTimestamp < 0 || (idTimestamp == 0 && idSequence < 1) {
-		return "", fmt.Errorf("The ID specified in XADD must be greater than 0-0")
-	}
+	entryIDParts := strings.Split(entryID, "-")
+	idTimestampStr, idSequenceStr := entryIDParts[0], entryIDParts[1]
 
-	entryKey := fmt.Sprintf("%d-%d", idTimestamp, idSequence)
+	entryKey := ""
 	oldVal, exists := s.data[key]
 	if !exists {
+		idTimestamp, idSequence, err := checkAndConvertEntryIDs(idTimestampStr, idSequenceStr, nil)
+		if err != nil {
+			return "", err
+		}
+		entryKey = fmt.Sprintf("%d-%d", idTimestamp, idSequence)
+
 		entries := art.New()
 		entry := StreamEntry{idTimestamp: uint64(idTimestamp), idSequence: uint64(idSequence), fields: fields, size: int64(len(fields))}
 		entries.Insert(art.Key(entryKey), art.Value(entry))
@@ -111,19 +118,90 @@ func (s *Store) SetStream(key string, idTimestamp, idSequence int64, fields map[
 		if !ok {
 			panic(fmt.Errorf("[SetStream] s.data[%q] is not a *RedisStream, it is %s", key, oldVal.ValueType.ToString()))
 		}
-		lastEntryIDTimestamp, lastEntryIDSequence := stream.lastEntry.idTimestamp, stream.lastEntry.idSequence
-		if idTimestamp < int64(lastEntryIDTimestamp) {
-			return "", fmt.Errorf("The ID specified in XADD is equal or smaller than the target stream top item")
+
+		idTimestamp, idSequence, err := checkAndConvertEntryIDs(idTimestampStr, idSequenceStr, stream.lastEntry)
+		if err != nil {
+			return "", err
 		}
-		if idTimestamp == int64(lastEntryIDTimestamp) && idSequence <= int64(lastEntryIDSequence) {
-			return "", fmt.Errorf("The ID specified in XADD is equal or smaller than the target stream top item")
-		}
+		entryKey = fmt.Sprintf("%d-%d", idTimestamp, idSequence)
+
 		entry := StreamEntry{idTimestamp: uint64(idTimestamp), idSequence: uint64(idSequence), fields: fields, size: int64(len(fields))}
 		stream.entries.Insert(art.Key(entryKey), art.Value(entry))
 		stream.lastEntry = &entry
 	}
 
 	return entryKey, nil
+}
+
+// checkAndConvertEntryIDs autogenerates ids (timestamp, sequence) if needed, converts to int, and returns
+func checkAndConvertEntryIDs(idTimestampStr, idSequenceStr string, lastStreamEntry *StreamEntry) (int, int, error) {
+	idTimestamp, err := strconv.Atoi(idTimestampStr)
+	if err != nil {
+		return -1, -1, fmt.Errorf("entryIDTimestamp is not a number, it's %s, err: %v", idTimestampStr, err)
+	}
+
+	// Handle sequence based on whether it's a wildcard or a number
+	idSequence, err := parseSequence(idTimestampStr, idSequenceStr, idTimestamp, lastStreamEntry)
+	if err != nil {
+		return -1, -1, err
+	}
+
+	// Validate the resulting ID pair
+	if err := validateEntryID(idTimestamp, idSequence, lastStreamEntry); err != nil {
+		return -1, -1, err
+	}
+
+	return idTimestamp, idSequence, nil
+}
+
+// parseSequence determines the sequence number based on input and stream state
+func parseSequence(idTimestampStr, idSequenceStr string, idTimestamp int, lastStreamEntry *StreamEntry) (int, error) {
+	// If sequence is not a wildcard, parse it as a number
+	if idSequenceStr != "*" {
+		sequence, err := strconv.Atoi(idSequenceStr)
+		if err != nil {
+			return -1, fmt.Errorf("entryIDSequence is not a number, it's %s, err: %v", idSequenceStr, err)
+		}
+		return sequence, nil
+	}
+
+	// Handle wildcard sequence based on stream state
+	if lastStreamEntry == nil {
+		if idTimestamp == 0 {
+			return 1, nil
+		}
+		return 0, nil
+	}
+
+	if lastStreamEntry.idTimestamp == uint64(idTimestamp) {
+		return int(lastStreamEntry.idSequence) + 1, nil
+	}
+
+	return 0, nil
+}
+
+func validateEntryID(idTimestamp, idSequence int, lastStreamEntry *StreamEntry) error {
+	// Check if ID is valid (greater than 0-0)
+	if idTimestamp < 0 || (idTimestamp == 0 && idSequence < 1) {
+		return fmt.Errorf("The ID specified in XADD must be greater than 0-0")
+	}
+
+	// If there's no last entry, no further validation needed
+	if lastStreamEntry == nil {
+		return nil
+	}
+
+	// Check if new ID is smaller than the stream's last entry
+	if uint64(idTimestamp) < lastStreamEntry.idTimestamp {
+		return fmt.Errorf("The ID specified in XADD is equal or smaller than the target stream top item")
+	}
+
+	// Check if timestamp is equal but sequence is smaller or equal
+	if uint64(idTimestamp) == lastStreamEntry.idTimestamp && uint64(idSequence) <= lastStreamEntry.idSequence {
+		return fmt.Errorf("The ID specified in XADD is equal or smaller than the target stream top item")
+	}
+
+	return nil
 }
 
 // Get gets a value for a key, considering expiration

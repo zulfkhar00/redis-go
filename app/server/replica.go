@@ -371,8 +371,7 @@ func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 		return nil, nil, fmt.Errorf("invalid RDB size: %s", rdbSizeLine[1:])
 	}
 	rdbData := make([]byte, rdbSize)
-	_, err = reader.Read(rdbData)
-	// _, err = io.ReadFull(reader, rdbData)
+	_, err = io.ReadFull(reader, rdbData)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read RDB data: %v", err)
 	}
@@ -386,7 +385,7 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 
 	fmt.Printf("Replica: Starting to process replication commands\n")
 	for {
-		fmt.Printf("Replica: Waiting for next command from master...\n")
+		// fmt.Printf("Replica: Waiting for next command from master...\n")
 		cmd, bytesProcessed, err := protocol.ReadRedisCommand(reader)
 		if err != nil {
 			fmt.Printf("[replication conn] ReadRedisCommand err: %v\n", err)
@@ -396,7 +395,7 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 		if len(cmd) == 0 {
 			continue
 		}
-		// fmt.Printf("[replication conn] received cmd: %v\n", cmd)
+		fmt.Printf("[replication conn] received cmd: %v\n", cmd)
 
 		switch strings.ToLower(cmd[0]) {
 		case "ping":
