@@ -108,6 +108,11 @@ func handleReplicaCommand(cmd []string, server *Replica, connection net.Conn) er
 		if err != nil {
 			return fmt.Errorf("handleInfoReplicaCommand error: %v", err)
 		}
+	case "xrange":
+		err := handleXrangeReplicaCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleXaddCommand error: %v", err)
+		}
 	default:
 		err := handleUnknownReplicaCommand(connection)
 		if err != nil {
@@ -239,6 +244,41 @@ func handleInfoReplicaCommand(cmd []string, server *Replica, connection net.Conn
 	_, err := connection.Write(buf)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleXrangeReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
+	if len(cmd) != 4 {
+		return fmt.Errorf("expecting 4 arguments for XRANGE: XRANGE <stream_key> <start_entry_id> <end_entry_id>")
+	}
+	entries, err := server.kvStore.GetRangeStreamEntries(cmd[1], cmd[2], cmd[3])
+	if err != nil {
+		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		return nil
+	}
+
+	res := fmt.Sprintf("*%d\r\n", len(entries))
+	for _, entry := range entries {
+		idFormatted := protocol.FormatBulkString(entry.GetID())
+		fields := make([]string, 0)
+		for key, val := range entry.GetFields() {
+			fields = append(fields, key)
+			fields = append(fields, val)
+		}
+
+		fieldsFormatted := protocol.FormatRESPArray(fields)
+
+		res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
+	}
+
+	_, err = connection.Write([]byte(res))
+	if err != nil {
+		return fmt.Errorf("error writing to connection: %v", err)
 	}
 
 	return nil

@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,10 +43,19 @@ type RedisStream struct {
 }
 
 type StreamEntry struct {
-	idTimestamp uint64
-	idSequence  uint64
-	fields      map[string]string
-	size        int64
+	idTimestamp       uint64
+	idSequence        uint64
+	fields            map[string]string
+	size              int64
+	creationTimestamp uint64
+}
+
+func (s StreamEntry) GetID() string {
+	return fmt.Sprintf("%d-%d", s.idTimestamp, s.idSequence)
+}
+
+func (s StreamEntry) GetFields() map[string]string {
+	return s.fields
 }
 
 // KeyValue represents a value with an optional expiration time
@@ -105,6 +115,7 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 
 	entryKey := ""
 	oldVal, exists := s.data[key]
+	entryCreationTime := uint64(time.Now().UnixMilli())
 	if !exists {
 		idTimestamp, idSequence, err := checkAndConvertEntryIDs(idTimestampStr, idSequenceStr, nil)
 		if err != nil {
@@ -113,7 +124,13 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 		entryKey = fmt.Sprintf("%d-%d", idTimestamp, idSequence)
 
 		entries := art.New()
-		entry := StreamEntry{idTimestamp: uint64(idTimestamp), idSequence: uint64(idSequence), fields: fields, size: int64(len(fields))}
+		entry := StreamEntry{
+			idTimestamp:       uint64(idTimestamp),
+			idSequence:        uint64(idSequence),
+			fields:            fields,
+			size:              int64(len(fields)),
+			creationTimestamp: entryCreationTime,
+		}
 		entries.Insert(art.Key(entryKey), art.Value(entry))
 		stream := &RedisStream{entries: entries, size: 0, lastEntry: &entry}
 		s.data[key] = KeyValue{ValueType: StreamType, Value: stream, ExpireTime: "-1"}
@@ -129,12 +146,67 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 		}
 		entryKey = fmt.Sprintf("%d-%d", idTimestamp, idSequence)
 
-		entry := StreamEntry{idTimestamp: uint64(idTimestamp), idSequence: uint64(idSequence), fields: fields, size: int64(len(fields))}
+		entry := StreamEntry{
+			idTimestamp:       uint64(idTimestamp),
+			idSequence:        uint64(idSequence),
+			fields:            fields,
+			size:              int64(len(fields)),
+			creationTimestamp: entryCreationTime,
+		}
 		stream.entries.Insert(art.Key(entryKey), art.Value(entry))
 		stream.lastEntry = &entry
 	}
 
 	return entryKey, nil
+}
+
+func (s *Store) GetRangeStreamEntries(key, startEntryID, endEntryID string) ([]StreamEntry, error) {
+	idTimestampStart, idSequenceStart, err := parseEntryID(startEntryID)
+	if err != nil {
+		return nil, err
+	}
+	idTimestampEnd, idSequenceEnd, err := parseEntryID(endEntryID)
+	if err != nil {
+		return nil, err
+	}
+
+	streamVal := s.Get(key)
+	if streamVal == nil || streamVal.ValueType != StreamType {
+		return []StreamEntry{}, nil
+	}
+
+	stream, ok := streamVal.Value.(*RedisStream)
+	if !ok {
+		panic(fmt.Errorf("[SetStream] s.data[%q] is not a *RedisStream, it is %s", key, streamVal.ValueType.ToString()))
+	}
+	entries := RadixTreeRangeQuery(stream.entries, int64(idTimestampStart), int64(idSequenceStart), int64(idTimestampEnd), int64(idSequenceEnd))
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].creationTimestamp < entries[j].creationTimestamp
+	})
+
+	return entries, nil
+}
+
+func parseEntryID(entryID string) (idTimestamp, idSequence int, err error) {
+	parts := strings.Split(entryID, "-")
+	if len(parts) == 0 {
+		idTimestamp, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return -1, -1, fmt.Errorf("entryID is not a number: %s", parts[0])
+		}
+		return idTimestamp, 0, nil
+	}
+
+	idTimestamp, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return -1, -1, fmt.Errorf("entryID timestamp is not a number: %s", parts[0])
+	}
+	idSequence, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return -1, -1, fmt.Errorf("entryID sequence is not a number: %s", parts[0])
+	}
+
+	return idTimestamp, idSequence, nil
 }
 
 // checkAndConvertEntryIDs autogenerates ids (timestamp, sequence) if needed, converts to int, and returns
@@ -300,4 +372,48 @@ func getDataType(val interface{}) DataType {
 	default:
 		return UnknownType
 	}
+}
+
+func RadixTreeRangeQuery(tree art.Tree, startTS, startSeq, endTS, endSeq int64) []StreamEntry {
+	startKey := fmt.Sprintf("%d-%d", startTS, startSeq)
+	endKey := fmt.Sprintf("%d-%d", endTS, endSeq)
+
+	var prefix string
+	if startTS == endTS {
+		prefix = fmt.Sprintf("%d-", startTS)
+	} else {
+		prefix = longestCommonPrefix(startKey, endKey)
+	}
+
+	res := make([]StreamEntry, 0)
+	tree.ForEachPrefix(art.Key(prefix), func(node art.Node) bool {
+		nodeKey := string(node.Key())
+		if startKey <= nodeKey && nodeKey <= endKey {
+			streamEntry, ok := node.Value().(StreamEntry)
+			if !ok {
+				fmt.Printf("RadixTreeRangeQuery err: stream entry is not StreamEntry, it is: %v\n", node.Value())
+				return nodeKey <= endKey
+			}
+			res = append(res, streamEntry)
+		}
+
+		return nodeKey <= endKey
+	})
+
+	return res
+}
+
+func longestCommonPrefix(s1, s2 string) string {
+	minLen := len(s1)
+	if len(s2) < minLen {
+		minLen = len(s2)
+	}
+
+	for i := 0; i < minLen; i++ {
+		if s1[i] != s2[i] {
+			return s1[:i]
+		}
+	}
+
+	return s1[:minLen]
 }
