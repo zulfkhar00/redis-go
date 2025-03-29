@@ -50,16 +50,11 @@ func (server *Replica) Start() error {
 
 func (server *Replica) handleConnection(connection net.Conn) (err error) {
 	defer connection.Close()
+	fmt.Printf("Replica: starting to process client commands\n")
+
+	reader := bufio.NewReader(connection)
 	for {
-		buf := make([]byte, 1024)
-		n, err := connection.Read(buf)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-
-		buf = buf[:n]
-
-		cmd, err := protocol.ParseCommand(buf)
+		cmd, _, err := protocol.ReadRedisCommand(reader)
 		if err != nil {
 			return errors.New("parse command")
 		}
@@ -69,8 +64,6 @@ func (server *Replica) handleConnection(connection net.Conn) (err error) {
 			fmt.Printf("%v\n", err)
 		}
 	}
-
-	return nil
 }
 
 func handleReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
@@ -181,7 +174,7 @@ func handleGetReplicaCommand(cmd []string, server *Replica, connection net.Conn)
 		return fmt.Errorf("expecting only 1 argument for GET")
 	}
 	result := server.kvStore.Get(cmd[1])
-	buf := []byte("")
+	buf := []byte(protocol.FormatBulkString(""))
 	if result != nil && result.ValueType != db.StreamType {
 		buf = []byte(protocol.FormatBulkString(result.ToString()))
 	}

@@ -145,7 +145,7 @@ func checkAndConvertEntryIDs(idTimestampStr, idSequenceStr string, lastStreamEnt
 	}
 
 	// Handle sequence based on whether it's a wildcard or a number
-	idSequence, err := parseSequence(idTimestampStr, idSequenceStr, idTimestamp, lastStreamEntry)
+	idSequence, err := parseSequence(idSequenceStr, idTimestamp, lastStreamEntry)
 	if err != nil {
 		return -1, -1, err
 	}
@@ -159,7 +159,7 @@ func checkAndConvertEntryIDs(idTimestampStr, idSequenceStr string, lastStreamEnt
 }
 
 // parseSequence determines the sequence number based on input and stream state
-func parseSequence(idTimestampStr, idSequenceStr string, idTimestamp int, lastStreamEntry *StreamEntry) (int, error) {
+func parseSequence(idSequenceStr string, idTimestamp int, lastStreamEntry *StreamEntry) (int, error) {
 	// If sequence is not a wildcard, parse it as a number
 	if idSequenceStr != "*" {
 		sequence, err := strconv.Atoi(idSequenceStr)
