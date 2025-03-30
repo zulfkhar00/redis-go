@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -190,6 +191,9 @@ func (s *Store) GetRangeStreamEntries(key, startEntryID, endEntryID string) ([]S
 func parseEntryID(entryID string) (idTimestamp, idSequence int, err error) {
 	if entryID == "-" {
 		return 0, 0, nil
+	}
+	if entryID == "+" {
+		return math.MaxInt, math.MaxInt, nil
 	}
 	parts := strings.Split(entryID, "-")
 	if len(parts) == 0 {
