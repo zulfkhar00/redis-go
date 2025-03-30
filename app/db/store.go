@@ -188,6 +188,9 @@ func (s *Store) GetRangeStreamEntries(key, startEntryID, endEntryID string) ([]S
 }
 
 func parseEntryID(entryID string) (idTimestamp, idSequence int, err error) {
+	if entryID == "-" {
+		return 0, 0, nil
+	}
 	parts := strings.Split(entryID, "-")
 	if len(parts) == 0 {
 		idTimestamp, err := strconv.Atoi(parts[0])
