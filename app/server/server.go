@@ -150,6 +150,11 @@ func handleCommand(cmd []string, server *Server, connection net.Conn) error {
 		if err != nil {
 			return fmt.Errorf("handleXaddCommand error: %v", err)
 		}
+	case "xread":
+		err := handleXreadCommand(cmd, server, connection)
+		if err != nil {
+			return fmt.Errorf("handleXreadCommand error: %v", err)
+		}
 	default:
 		err := handleUnknownCommand(connection)
 		if err != nil {
@@ -462,6 +467,41 @@ func handleXrangeCommand(cmd []string, server *Server, connection net.Conn) erro
 	}
 
 	res := fmt.Sprintf("*%d\r\n", len(entries))
+	for _, entry := range entries {
+		idFormatted := protocol.FormatBulkString(entry.GetID())
+		fields := make([]string, 0)
+		for key, val := range entry.GetFields() {
+			fields = append(fields, key)
+			fields = append(fields, val)
+		}
+
+		fieldsFormatted := protocol.FormatRESPArray(fields)
+
+		res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
+	}
+
+	_, err = connection.Write([]byte(res))
+	if err != nil {
+		return fmt.Errorf("error writing to connection: %v", err)
+	}
+
+	return nil
+}
+
+func handleXreadCommand(cmd []string, server *Server, connection net.Conn) error {
+	if len(cmd) != 4 {
+		return fmt.Errorf("expecting 4 arguments for XREAD: XREAD streams <stream_key> <entry_id>")
+	}
+	entries, err := server.kvStore.GetNewerStreamEntries(cmd[2], cmd[3])
+	if err != nil {
+		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		return nil
+	}
+
+	res := fmt.Sprintf("*1\r\n*2\r\n%s*%d\r\n", protocol.FormatBulkString(cmd[2]), len(entries))
 	for _, entry := range entries {
 		idFormatted := protocol.FormatBulkString(entry.GetID())
 		fields := make([]string, 0)

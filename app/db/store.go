@@ -178,9 +178,32 @@ func (s *Store) GetRangeStreamEntries(key, startEntryID, endEntryID string) ([]S
 
 	stream, ok := streamVal.Value.(*RedisStream)
 	if !ok {
-		panic(fmt.Errorf("[SetStream] s.data[%q] is not a *RedisStream, it is %s", key, streamVal.ValueType.ToString()))
+		panic(fmt.Errorf("[GetRangeStreamEntries] s.Get(%q) is not a *RedisStream, it is %s", key, streamVal.ValueType.ToString()))
 	}
 	entries := RadixTreeRangeQuery(stream.entries, int64(idTimestampStart), int64(idSequenceStart), int64(idTimestampEnd), int64(idSequenceEnd))
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].creationTimestamp < entries[j].creationTimestamp
+	})
+
+	return entries, nil
+}
+
+func (s *Store) GetNewerStreamEntries(key, minEntryID string) ([]StreamEntry, error) {
+	minIDTimestamp, minIDSequence, err := parseEntryID(minEntryID)
+	if err != nil {
+		return nil, err
+	}
+
+	streamVal := s.Get(key)
+	if streamVal == nil || streamVal.ValueType != StreamType {
+		return []StreamEntry{}, nil
+	}
+
+	stream, ok := streamVal.Value.(*RedisStream)
+	if !ok {
+		panic(fmt.Errorf("[GetNewerStreamEntries] s.Get(%q) is not a *RedisStream, it is %s", key, streamVal.ValueType.ToString()))
+	}
+	entries := RadixTreeQueryKeysGreaterThan(stream.entries, int64(minIDTimestamp), int64(minIDSequence))
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].creationTimestamp < entries[j].creationTimestamp
 	})
@@ -405,6 +428,26 @@ func RadixTreeRangeQuery(tree art.Tree, startTS, startSeq, endTS, endSeq int64) 
 		}
 
 		return nodeKey <= endKey
+	})
+
+	return res
+}
+
+func RadixTreeQueryKeysGreaterThan(tree art.Tree, minTS, minSeq int64) []StreamEntry {
+	minKey := fmt.Sprintf("%d-%d", minTS, minSeq)
+	res := make([]StreamEntry, 0)
+
+	tree.ForEach(func(node art.Node) (cont bool) {
+		nodeKey := string(node.Key())
+		if nodeKey > minKey {
+			streamEntry, ok := node.Value().(StreamEntry)
+			if !ok {
+				fmt.Printf("RadixTreeQueryKeysGreaterThan err: stream entry is not StreamEntry, it is: %v\n", node.Value())
+				return true
+			}
+			res = append(res, streamEntry)
+		}
+		return true
 	})
 
 	return res
