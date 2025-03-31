@@ -587,7 +587,10 @@ func handleXreadBlockingCommand(timeoutMs, streamKey, entryID string, server *Se
 	ch := db.StreamNotifier.RegisterWaiter(streamKey)
 	defer db.StreamNotifier.UnRegisterWaiter(streamKey, ch)
 
-	timer := time.After(time.Duration(timeout) * time.Millisecond)
+	timer := (<-chan time.Time)(nil)
+	if timeout > 0 {
+		timer = time.After(time.Duration(timeout) * time.Millisecond)
+	}
 	done := false
 	var receviedStream *db.RedisStream
 	for !done {
@@ -600,6 +603,7 @@ func handleXreadBlockingCommand(timeoutMs, streamKey, entryID string, server *Se
 				return fmt.Errorf("new stream is not *RedisStream, it is %v", stream)
 			}
 			receviedStream = newStream
+			done = true
 		case <-timer:
 			fmt.Printf("timeout\n")
 			done = true
