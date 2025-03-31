@@ -564,6 +564,7 @@ func handleXreadBlockingCommand(timeoutMs, streamKey, entryID string, server *Se
 		}
 		return err
 	}
+	latestEntry := server.kvStore.GetLatestStreamEntry(streamKey)
 	newEntries, _ := server.kvStore.GetNewerStreamEntries(streamKey, entryID)
 	if len(newEntries) > 0 {
 		res := fmt.Sprintf("*1\r\n*2\r\n%s*1\r\n", protocol.FormatBulkString(streamKey))
@@ -614,7 +615,12 @@ func handleXreadBlockingCommand(timeoutMs, streamKey, entryID string, server *Se
 		_, err = connection.Write([]byte("$-1\r\n"))
 		return err
 	}
-	entriesToSend := receviedStream.GetNewerEntries(entryID)
+	entriesToSend := make([]db.StreamEntry, 0)
+	if latestEntry == nil {
+		entriesToSend = receviedStream.GetNewerEntries(entryID)
+	} else {
+		entriesToSend = receviedStream.GetNewerEntries(latestEntry.GetID())
+	}
 
 	res := fmt.Sprintf("*1\r\n*2\r\n%s*1\r\n", protocol.FormatBulkString(streamKey))
 	for _, entry := range entriesToSend {

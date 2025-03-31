@@ -45,6 +45,18 @@ type RedisStream struct {
 
 func (s *RedisStream) GetNewerEntries(minEntryID string) []StreamEntry {
 	entries := make([]StreamEntry, 0)
+	if minEntryID == "$" {
+		s.entries.ForEach(func(node art.Node) (cont bool) {
+			entry, ok := node.Value().(StreamEntry)
+			if !ok {
+				fmt.Printf("entry is not StreamEntry, it is %v\n", node.Value())
+				return true
+			}
+			entries = append(entries, entry)
+			return true
+		})
+		return entries
+	}
 
 	s.entries.ForEach(func(node art.Node) (cont bool) {
 		nodeKey := string(node.Key())
@@ -207,6 +219,9 @@ func (s *Store) GetRangeStreamEntries(key, startEntryID, endEntryID string) ([]S
 }
 
 func (s *Store) GetNewerStreamEntries(key, minEntryID string) ([]StreamEntry, error) {
+	if minEntryID == "$" {
+		return []StreamEntry{}, nil
+	}
 	minIDTimestamp, minIDSequence, err := parseEntryID(minEntryID)
 	if err != nil {
 		return nil, err
@@ -227,6 +242,18 @@ func (s *Store) GetNewerStreamEntries(key, minEntryID string) ([]StreamEntry, er
 	})
 
 	return entries, nil
+}
+
+func (s *Store) GetLatestStreamEntry(key string) *StreamEntry {
+	streamVal := s.Get(key)
+	if streamVal == nil || streamVal.ValueType != StreamType {
+		return nil
+	}
+	stream, ok := streamVal.Value.(*RedisStream)
+	if !ok {
+		panic(fmt.Errorf("[GetLatestStreamEntry] s.Get(%q) is not a *RedisStream, it is %s", key, streamVal.ValueType.ToString()))
+	}
+	return stream.lastEntry
 }
 
 func parseEntryID(entryID string) (idTimestamp, idSequence int, err error) {
