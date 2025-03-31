@@ -43,6 +43,25 @@ type RedisStream struct {
 	lastEntry *StreamEntry
 }
 
+func (s *RedisStream) GetNewerEntries(minEntryID string) []StreamEntry {
+	entries := make([]StreamEntry, 0)
+
+	s.entries.ForEach(func(node art.Node) (cont bool) {
+		nodeKey := string(node.Key())
+		if nodeKey > minEntryID {
+			entry, ok := node.Value().(StreamEntry)
+			if !ok {
+				fmt.Printf("entry is not StreamEntry, it is %v\n", node.Value())
+				return true
+			}
+			entries = append(entries, entry)
+		}
+		return true
+	})
+
+	return entries
+}
+
 type StreamEntry struct {
 	idTimestamp       uint64
 	idSequence        uint64
@@ -101,7 +120,7 @@ func (s *Store) Set(key string, val interface{}, expireMS int) string {
 	return "OK"
 }
 
-func (s *Store) SetStream(key, entryID string, fields map[string]string) (string, error) {
+func (s *Store) SetStream(key, entryID string, fields map[string]string) (*RedisStream, string, error) {
 	var idTimestampStr, idSequenceStr string
 	if entryID == "*" {
 		idTimestampStr = fmt.Sprintf("%d", time.Now().UnixMilli())
@@ -110,9 +129,7 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 		entryIDParts := strings.Split(entryID, "-")
 		idTimestampStr, idSequenceStr = entryIDParts[0], entryIDParts[1]
 	}
-
-	// s.mu.Lock()
-	// defer s.mu.Unlock()
+	var finalStream *RedisStream
 
 	entryKey := ""
 	oldVal, exists := s.data[key]
@@ -120,7 +137,7 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 	if !exists {
 		idTimestamp, idSequence, err := checkAndConvertEntryIDs(idTimestampStr, idSequenceStr, nil)
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 		entryKey = fmt.Sprintf("%d-%d", idTimestamp, idSequence)
 
@@ -133,17 +150,18 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 			creationTimestamp: entryCreationTime,
 		}
 		entries.Insert(art.Key(entryKey), art.Value(entry))
-		stream := &RedisStream{entries: entries, size: 0, lastEntry: &entry}
-		s.data[key] = KeyValue{ValueType: StreamType, Value: stream, ExpireTime: "-1"}
+		finalStream = &RedisStream{entries: entries, size: 0, lastEntry: &entry}
+		s.data[key] = KeyValue{ValueType: StreamType, Value: finalStream, ExpireTime: "-1"}
 	} else {
 		stream, ok := oldVal.Value.(*RedisStream)
+		finalStream = stream
 		if !ok {
 			panic(fmt.Errorf("[SetStream] s.data[%q] is not a *RedisStream, it is %s", key, oldVal.ValueType.ToString()))
 		}
 
 		idTimestamp, idSequence, err := checkAndConvertEntryIDs(idTimestampStr, idSequenceStr, stream.lastEntry)
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 		entryKey = fmt.Sprintf("%d-%d", idTimestamp, idSequence)
 
@@ -158,7 +176,7 @@ func (s *Store) SetStream(key, entryID string, fields map[string]string) (string
 		stream.lastEntry = &entry
 	}
 
-	return entryKey, nil
+	return finalStream, entryKey, nil
 }
 
 func (s *Store) GetRangeStreamEntries(key, startEntryID, endEntryID string) ([]StreamEntry, error) {

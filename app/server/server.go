@@ -436,7 +436,7 @@ func handleXaddCommand(cmd []string, server *Server, connection net.Conn) error 
 		key, val := cmd[i], cmd[i+1]
 		fields[key] = val
 	}
-	res, err := server.kvStore.SetStream(cmd[1], cmd[2], fields)
+	stream, res, err := server.kvStore.SetStream(cmd[1], cmd[2], fields)
 	if err != nil {
 		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
 		if err != nil {
@@ -449,6 +449,7 @@ func handleXaddCommand(cmd []string, server *Server, connection net.Conn) error 
 	if err != nil {
 		return fmt.Errorf("error writing to connection: %v", err)
 	}
+	go db.StreamNotifier.Notify(cmd[1], stream)
 
 	return nil
 }
@@ -492,9 +493,18 @@ func handleXreadCommand(cmd []string, server *Server, connection net.Conn) error
 	if len(cmd) < 4 {
 		return fmt.Errorf("expecting at least 4 arguments for XREAD: XREAD streams <stream_key> <entry_id>")
 	}
-	if len(cmd)%2 != 0 {
+	if cmd[1] == "block" {
+		timeoutMs, streamKey, entryID := cmd[2], cmd[4], cmd[5]
+		err := handleXreadBlockingCommand(timeoutMs, streamKey, entryID, server, connection)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	if cmd[1] == "streams" && len(cmd)%2 != 0 {
 		return fmt.Errorf("expecting even number of stream keys and entryIDs for XREAD: XREAD streams <stream_key_1> <entry_id_1> <stream_key_2> <entry_id_2> etc")
 	}
+
 	cmd = cmd[2:]
 	streamKeys, entryIDs := make([]string, 0), make([]string, 0)
 	for i := 0; i < len(cmd); i++ {
@@ -543,6 +553,85 @@ func handleXreadCommand(cmd []string, server *Server, connection net.Conn) error
 	}
 
 	return nil
+}
+
+func handleXreadBlockingCommand(timeoutMs, streamKey, entryID string, server *Server, connection net.Conn) error {
+	timeout, err := strconv.Atoi(timeoutMs)
+	if err != nil {
+		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		return err
+	}
+	newEntries, _ := server.kvStore.GetNewerStreamEntries(streamKey, entryID)
+	if len(newEntries) > 0 {
+		res := fmt.Sprintf("*1\r\n*2\r\n%s*1\r\n", protocol.FormatBulkString(streamKey))
+		for _, entry := range newEntries {
+			idFormatted := protocol.FormatBulkString(entry.GetID())
+			fields := make([]string, 0)
+			for key, val := range entry.GetFields() {
+				fields = append(fields, key)
+				fields = append(fields, val)
+			}
+			fieldsFormatted := protocol.FormatRESPArray(fields)
+			res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
+		}
+		_, err = connection.Write([]byte(res))
+		if err != nil {
+			return fmt.Errorf("error writing to connection: %v", err)
+		}
+		return err
+	}
+
+	ch := db.StreamNotifier.RegisterWaiter(streamKey)
+	defer db.StreamNotifier.UnRegisterWaiter(streamKey, ch)
+
+	timer := time.After(time.Duration(timeout) * time.Millisecond)
+	done := false
+	var receviedStream *db.RedisStream
+	for !done {
+		select {
+		case stream := <-ch:
+			fmt.Printf("new stream received\n")
+			newStream, ok := stream.(*db.RedisStream)
+			if !ok {
+				fmt.Printf("new stream is not *RedisStream, it is %v\n", stream)
+				return fmt.Errorf("new stream is not *RedisStream, it is %v", stream)
+			}
+			receviedStream = newStream
+		case <-timer:
+			fmt.Printf("timeout\n")
+			done = true
+		}
+	}
+	// send this new stream
+	if receviedStream == nil {
+		_, err = connection.Write([]byte("$-1\r\n"))
+		return err
+	}
+	entriesToSend := receviedStream.GetNewerEntries(entryID)
+
+	res := fmt.Sprintf("*1\r\n*2\r\n%s*1\r\n", protocol.FormatBulkString(streamKey))
+	for _, entry := range entriesToSend {
+		idFormatted := protocol.FormatBulkString(entry.GetID())
+		fields := make([]string, 0)
+		for key, val := range entry.GetFields() {
+			fields = append(fields, key)
+			fields = append(fields, val)
+		}
+
+		fieldsFormatted := protocol.FormatRESPArray(fields)
+
+		res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
+	}
+
+	_, err = connection.Write([]byte(res))
+	if err != nil {
+		return fmt.Errorf("error writing to connection: %v", err)
+	}
+
+	return err
 }
 
 func handleUnknownCommand(connection net.Conn) error {
