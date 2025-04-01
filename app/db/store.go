@@ -437,10 +437,13 @@ func (s *Store) Length() int {
 }
 
 func getDataType(val interface{}) DataType {
-	switch val.(type) {
+	switch v := val.(type) {
 	case string:
+		if _, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return IntegerType
+		}
 		return StringType
-	case int:
+	case int, int64:
 		return IntegerType
 	case *RedisStream:
 		return StreamType

@@ -50,6 +50,7 @@ func (server *Server) RegisterCommands() {
 	server.commandRegistry.Register("xadd")
 	server.commandRegistry.Register("xrange")
 	server.commandRegistry.Register("xread")
+	server.commandRegistry.Register("incr")
 }
 
 func (server *Server) Start() error {
