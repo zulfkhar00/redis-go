@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 
+	"github.com/codecrafters-io/redis-starter-go/app/db"
 	"github.com/codecrafters-io/redis-starter-go/app/protocol"
 )
 
@@ -19,14 +20,16 @@ func (c *XrangeCommand) Execute(ctx *CommandContext) error {
 	}
 	streamKey, startEntryID, endEntryID := ctx.Args[1], ctx.Args[2], ctx.Args[3]
 	entries, err := ctx.Store.GetRangeStreamEntries(streamKey, startEntryID, endEntryID)
+
+	res := formatStreamEntries(entries)
 	if err != nil {
-		_, err := ctx.Connection.Write([]byte(protocol.FormatRESPError(err)))
-		if err != nil {
-			return fmt.Errorf("error writing to connection: %v", err)
-		}
-		return nil
+		return handleError(ctx.Connection, err)
 	}
 
+	return writeResponse(ctx.Connection, res)
+}
+
+func formatStreamEntries(entries []db.StreamEntry) string {
 	res := fmt.Sprintf("*%d\r\n", len(entries))
 	for _, entry := range entries {
 		idFormatted := protocol.FormatBulkString(entry.GetID())
@@ -40,11 +43,5 @@ func (c *XrangeCommand) Execute(ctx *CommandContext) error {
 
 		res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
 	}
-
-	_, err = ctx.Connection.Write([]byte(res))
-	if err != nil {
-		return fmt.Errorf("error writing to connection: %v", err)
-	}
-
-	return nil
+	return res
 }

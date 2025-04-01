@@ -22,11 +22,7 @@ func (c *XreadCommand) Execute(ctx *CommandContext) error {
 	}
 	if ctx.Args[1] == "block" {
 		timeoutMs, streamKey, entryID := ctx.Args[2], ctx.Args[4], ctx.Args[5]
-		err := handleXreadBlockingCommand(ctx, timeoutMs, streamKey, entryID)
-		if err != nil {
-			return err
-		}
-		return nil
+		return handleXreadBlockingCommand(ctx, timeoutMs, streamKey, entryID)
 	}
 	if ctx.Args[1] == "streams" && len(ctx.Args)%2 != 0 {
 		return fmt.Errorf("expecting even number of stream keys and entryIDs for XREAD: XREAD streams <stream_key_1> <entry_id_1> <stream_key_2> <entry_id_2> etc")
@@ -47,39 +43,14 @@ func (c *XreadCommand) Execute(ctx *CommandContext) error {
 		minEntryID := entryIDs[i]
 		entries, err := ctx.Store.GetNewerStreamEntries(streamKey, minEntryID)
 		if err != nil {
-			_, err := ctx.Connection.Write([]byte(protocol.FormatRESPError(err)))
-			if err != nil {
-				return fmt.Errorf("error writing to connection: %v", err)
-			}
-			return nil
+			return handleError(ctx.Connection, err)
 		}
 		streamKeyEntries[streamKey] = entries
 	}
 
-	res := fmt.Sprintf("*%d\r\n", len(streamKeyEntries))
-	for streamKey, entries := range streamKeyEntries {
-		res += fmt.Sprintf("*2\r\n%s*1\r\n", protocol.FormatBulkString(streamKey))
+	res := formatMultiStreamEntries(streamKeyEntries)
 
-		for _, entry := range entries {
-			idFormatted := protocol.FormatBulkString(entry.GetID())
-			fields := make([]string, 0)
-			for key, val := range entry.GetFields() {
-				fields = append(fields, key)
-				fields = append(fields, val)
-			}
-
-			fieldsFormatted := protocol.FormatRESPArray(fields)
-
-			res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
-		}
-	}
-
-	_, err := ctx.Connection.Write([]byte(res))
-	if err != nil {
-		return fmt.Errorf("error writing to connection: %v", err)
-	}
-
-	return nil
+	return writeResponse(ctx.Connection, res)
 }
 
 func handleXreadBlockingCommand(ctx *CommandContext, timeoutMs, streamKey, entryID string) error {
@@ -169,4 +140,25 @@ func handleXreadBlockingCommand(ctx *CommandContext, timeoutMs, streamKey, entry
 	}
 
 	return err
+}
+
+func formatMultiStreamEntries(streamKeyEntries map[string][]db.StreamEntry) string {
+	res := fmt.Sprintf("*%d\r\n", len(streamKeyEntries))
+	for streamKey, entries := range streamKeyEntries {
+		res += fmt.Sprintf("*2\r\n%s*1\r\n", protocol.FormatBulkString(streamKey))
+
+		for _, entry := range entries {
+			idFormatted := protocol.FormatBulkString(entry.GetID())
+			fields := make([]string, 0)
+			for key, val := range entry.GetFields() {
+				fields = append(fields, key)
+				fields = append(fields, val)
+			}
+
+			fieldsFormatted := protocol.FormatRESPArray(fields)
+
+			res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
+		}
+	}
+	return res
 }

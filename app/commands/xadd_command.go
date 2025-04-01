@@ -27,17 +27,13 @@ func (c *XaddCommand) Execute(ctx *CommandContext) error {
 
 	stream, res, err := ctx.Store.SetStream(ctx.Args[1], ctx.Args[2], fields)
 	if err != nil {
-		_, err := ctx.Connection.Write([]byte(protocol.FormatRESPError(err)))
-		if err != nil {
-			return fmt.Errorf("error writing to connection: %v", err)
-		}
-		return nil
+		return handleError(ctx.Connection, err)
 	}
 
-	_, err = ctx.Connection.Write([]byte(protocol.FormatBulkString(res)))
-	if err != nil {
-		return fmt.Errorf("error writing to connection: %v", err)
+	if err = writeResponse(ctx.Connection, protocol.FormatBulkString(res)); err != nil {
+		return err
 	}
+
 	go db.StreamNotifier.Notify(streamKey, stream)
 
 	return nil
