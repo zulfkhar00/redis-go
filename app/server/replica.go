@@ -10,21 +10,39 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/codecrafters-io/redis-starter-go/app/commands"
 	"github.com/codecrafters-io/redis-starter-go/app/config"
 	"github.com/codecrafters-io/redis-starter-go/app/db"
 	"github.com/codecrafters-io/redis-starter-go/app/protocol"
 )
 
 type Replica struct {
-	cfg     *config.Config
-	kvStore *db.Store
+	cfg             *config.Config
+	kvStore         *db.Store
+	commandRegistry *commands.CommandRegistry
 }
 
 func NewReplica(cfg *config.Config, kvStore *db.Store) *Replica {
-	return &Replica{
+	server := &Replica{
 		cfg,
 		kvStore,
+		commands.NewCommandRegistry(),
 	}
+	server.RegisterCommands()
+
+	return server
+}
+
+func (server *Replica) RegisterCommands() {
+	server.commandRegistry.Register("command")
+	server.commandRegistry.Register("ping")
+	server.commandRegistry.Register("echo")
+	server.commandRegistry.Register("set")
+	server.commandRegistry.Register("get")
+	server.commandRegistry.Register("config")
+	server.commandRegistry.Register("keys")
+	server.commandRegistry.Register("info")
+	server.commandRegistry.Register("xrange")
 }
 
 func (server *Replica) Start() error {
@@ -67,221 +85,17 @@ func (server *Replica) handleConnection(connection net.Conn) (err error) {
 }
 
 func handleReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	switch strings.ToLower(cmd[0]) {
-	case "command":
-		err := handleCommandReplicaCommand(connection)
-		if err != nil {
-			return fmt.Errorf("handleCommandReplicaCommand error: %v", err)
-		}
-	case "ping":
-		err := handlePingReplicaCommand(connection)
-		if err != nil {
-			return fmt.Errorf("handlePingReplicaCommand error: %v", err)
-		}
-	case "echo":
-		err := handleEchoReplicaCommand(cmd, connection)
-		if err != nil {
-			return fmt.Errorf("handleEchoReplicaCommand error: %v", err)
-		}
-	case "set":
-		err := handleSetReplicaCommand(cmd, server, connection)
-		if err != nil {
-			return fmt.Errorf("handleSetReplicaCommand error: %v", err)
-		}
-	case "get":
-		err := handleGetReplicaCommand(cmd, server, connection)
-		if err != nil {
-			return fmt.Errorf("handleGetReplicaCommand error: %v", err)
-		}
-	case "config":
-		err := handleConfigReplicaCommand(cmd, server, connection)
-		if err != nil {
-			return fmt.Errorf("handleConfigReplicaCommand error: %v", err)
-		}
-	case "keys":
-		err := handleKeysReplicaCommand(cmd, server, connection)
-		if err != nil {
-			return fmt.Errorf("handleKeysReplicaCommand error: %v", err)
-		}
-	case "info":
-		err := handleInfoReplicaCommand(cmd, server, connection)
-		if err != nil {
-			return fmt.Errorf("handleInfoReplicaCommand error: %v", err)
-		}
-	case "xrange":
-		err := handleXrangeReplicaCommand(cmd, server, connection)
-		if err != nil {
-			return fmt.Errorf("handleXaddCommand error: %v", err)
-		}
-	default:
-		err := handleUnknownReplicaCommand(connection)
-		if err != nil {
-			return fmt.Errorf("handleUnknownCommand error: %v", err)
-		}
+	ctx := &commands.CommandContext{
+		Args:       cmd,
+		Store:      server.kvStore,
+		Connection: connection,
+		Config:     server.cfg,
+		Role:       commands.Slave,
 	}
 
-	return nil
-}
+	command := server.commandRegistry.Get(cmd[0])
 
-func handleCommandReplicaCommand(connection net.Conn) error {
-	var buf []byte
-	buf = protocol.AppendSimpleString(buf, "")
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-	return nil
-}
-
-func handlePingReplicaCommand(connection net.Conn) error {
-	var buf []byte
-	buf = protocol.AppendSimpleString(buf, "PONG")
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-	return nil
-}
-
-func handleEchoReplicaCommand(cmd []string, connection net.Conn) error {
-	var buf []byte
-	buf = protocol.AppendSimpleString(buf, strings.Join(cmd[1:], " "))
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-	return nil
-}
-
-func handleSetReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	var buf []byte
-	var result string
-	if len(cmd) == 3 {
-		result = server.kvStore.Set(cmd[1], cmd[2], -1)
-	} else if len(cmd) == 5 && cmd[3] == "px" {
-		expireTimeMs, err := strconv.Atoi(cmd[4])
-		if err != nil {
-			return fmt.Errorf("expire time is not a number: %v", err)
-		}
-		result = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
-	}
-	buf = protocol.AppendSimpleString(buf, result)
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
-}
-
-func handleGetReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	if len(cmd) != 2 {
-		return fmt.Errorf("expecting only 1 argument for GET")
-	}
-	result := server.kvStore.Get(cmd[1])
-	buf := []byte(protocol.FormatBulkString(""))
-	if result != nil && result.ValueType != db.StreamType {
-		buf = []byte(protocol.FormatBulkString(result.ToString()))
-	}
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
-}
-
-func handleConfigReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	if len(cmd) <= 2 {
-		return fmt.Errorf("expecting at least 1 arguemnt for CONFIG")
-	}
-	var buf []byte
-	if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dir" {
-		buf = []byte(protocol.FormatRESPArray([]string{"dir", server.cfg.Dir}))
-	}
-	if strings.ToLower(cmd[1]) == "get" && cmd[2] == "dbfilename" {
-		buf = []byte(protocol.FormatRESPArray([]string{"dbfilename", server.cfg.DbFileName}))
-	}
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
-}
-
-func handleKeysReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	if len(cmd) != 2 {
-		return fmt.Errorf("expecting 1 argument for KEYS")
-	}
-	result := server.kvStore.Keys(cmd[1])
-	buf := []byte(protocol.FormatRESPArray(result))
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
-}
-
-func handleUnknownReplicaCommand(connection net.Conn) error {
-	var buf []byte
-	buf = protocol.AppendSimpleString(buf, "ERR unknown command")
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
-}
-
-func handleInfoReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	result := ""
-	if len(cmd) == 2 {
-		result = server.info(cmd[1])
-	}
-	buf := []byte(protocol.FormatBulkString(result))
-	_, err := connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
-}
-
-func handleXrangeReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
-	if len(cmd) != 4 {
-		return fmt.Errorf("expecting 4 arguments for XRANGE: XRANGE <stream_key> <start_entry_id> <end_entry_id>")
-	}
-	entries, err := server.kvStore.GetRangeStreamEntries(cmd[1], cmd[2], cmd[3])
-	if err != nil {
-		_, err := connection.Write([]byte(protocol.FormatRESPError(err)))
-		if err != nil {
-			return fmt.Errorf("error writing to connection: %v", err)
-		}
-		return nil
-	}
-
-	res := fmt.Sprintf("*%d\r\n", len(entries))
-	for _, entry := range entries {
-		idFormatted := protocol.FormatBulkString(entry.GetID())
-		fields := make([]string, 0)
-		for key, val := range entry.GetFields() {
-			fields = append(fields, key)
-			fields = append(fields, val)
-		}
-
-		fieldsFormatted := protocol.FormatRESPArray(fields)
-
-		res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
-	}
-
-	_, err = connection.Write([]byte(res))
-	if err != nil {
-		return fmt.Errorf("error writing to connection: %v", err)
-	}
-
-	return nil
+	return command.Execute(ctx)
 }
 
 func (server *Replica) ConnectToMaster() error {
@@ -458,17 +272,4 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 		}
 		server.cfg.MasterReplOffset += bytesProcessed
 	}
-}
-
-func (server *Replica) info(key string) string {
-	if key == "replication" {
-		res := "# Replication\n"
-		res += fmt.Sprintf("role:%s\n", config.RedisInfo.ReplicationInfo.Role)
-		res += fmt.Sprintf("master_replid:%s\n", config.RedisInfo.ReplicationInfo.MasterReplID)
-		res += fmt.Sprintf("master_repl_offset:%d\n", config.RedisInfo.ReplicationInfo.MasterReplOffset)
-
-		return res
-	}
-
-	return ""
 }

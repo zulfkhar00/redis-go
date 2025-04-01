@@ -30,11 +30,11 @@ func NewServer(cfg *config.Config, kvStore *db.Store) *Server {
 		kvStore,
 		commands.NewCommandRegistry(),
 	}
-	server.RegisterMasterCommands()
+	server.RegisterCommands()
 	return server
 }
 
-func (server *Server) RegisterMasterCommands() {
+func (server *Server) RegisterCommands() {
 	server.commandRegistry.Register("command")
 	server.commandRegistry.Register("ping")
 	server.commandRegistry.Register("echo")
@@ -50,7 +50,6 @@ func (server *Server) RegisterMasterCommands() {
 	server.commandRegistry.Register("xadd")
 	server.commandRegistry.Register("xrange")
 	server.commandRegistry.Register("xread")
-	server.commandRegistry.Register("unknown")
 }
 
 func (server *Server) Start() error {
