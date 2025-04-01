@@ -23,8 +23,9 @@ func (c *IncrCommand) Execute(ctx *CommandContext) error {
 
 	key := ctx.Args[1]
 	val := ctx.Store.Get(key)
+	fmt.Printf("val: %v\n", val)
 	if val == nil {
-		_ = ctx.Store.Set(key, incrementedVal, -1)
+		_ = ctx.Store.Set(key, fmt.Sprintf("%d", incrementedVal), -1)
 		return writeResponse(ctx.Connection, protocol.FormatRESPInt(int64(incrementedVal)))
 	}
 
@@ -36,7 +37,7 @@ func (c *IncrCommand) Execute(ctx *CommandContext) error {
 	oldVal, _ := strconv.ParseInt(oldValStr, 10, 64)
 
 	incrementedVal = oldVal + 1
-	_ = ctx.Store.Set(key, incrementedVal, -1)
+	_ = ctx.Store.Set(key, fmt.Sprintf("%d", incrementedVal), -1)
 
 	return writeResponse(ctx.Connection, protocol.FormatRESPInt(incrementedVal))
 }
