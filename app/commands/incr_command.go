@@ -23,14 +23,13 @@ func (c *IncrCommand) Execute(ctx *CommandContext) error {
 
 	key := ctx.Args[1]
 	val := ctx.Store.Get(key)
-	fmt.Printf("val: %v\n", val)
 	if val == nil {
 		_ = ctx.Store.Set(key, fmt.Sprintf("%d", incrementedVal), -1)
 		return writeResponse(ctx.Connection, protocol.FormatRESPInt(int64(incrementedVal)))
 	}
 
 	if val.ValueType != db.IntegerType {
-		return handleError(ctx.Connection, fmt.Errorf("not a number, it is %s", val.ValueType.ToString()))
+		return handleError(ctx.Connection, fmt.Errorf("value is not an integer or out of range"))
 	}
 
 	oldValStr, _ := val.Value.(string)
