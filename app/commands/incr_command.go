@@ -19,6 +19,16 @@ func (c *IncrCommand) Execute(ctx *CommandContext) error {
 	if len(ctx.Args) != 2 {
 		return fmt.Errorf("expecting 1 argument: INCR <key>")
 	}
+	clientAdr := ctx.Connection.RemoteAddr().String()
+	if ctx.ServerControl.IsTransactionStarted(clientAdr) {
+		ctx.ServerControl.AddTransactionCommand(clientAdr, ctx.Args)
+		_, err := ctx.Connection.Write([]byte("+QUEUED\r\n"))
+		if err != nil {
+			return fmt.Errorf("cannot write to connection: %v", err)
+		}
+		return nil
+	}
+
 	incrementedVal := int64(1)
 
 	key := ctx.Args[1]

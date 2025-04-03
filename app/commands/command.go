@@ -14,6 +14,8 @@ type ServerController interface {
 	IsServerWaiting() bool
 	SetServerIsWaiting(newStatus bool)
 	TurnMultiOn(clientAdr string)
+	AddTransactionCommand(clientAdr string, cmd []string)
+	IsTransactionStarted(clientAdr string) bool
 }
 
 type RedisCommand interface {

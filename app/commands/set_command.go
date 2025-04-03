@@ -15,6 +15,16 @@ func (c *SetCommand) Name() string {
 }
 
 func (c *SetCommand) Execute(ctx *CommandContext) error {
+	clientAdr := ctx.Connection.RemoteAddr().String()
+	if ctx.ServerControl.IsTransactionStarted(clientAdr) {
+		ctx.ServerControl.AddTransactionCommand(clientAdr, ctx.Args)
+		_, err := ctx.Connection.Write([]byte("+QUEUED\r\n"))
+		if err != nil {
+			return fmt.Errorf("cannot write to connection: %v", err)
+		}
+		return nil
+	}
+
 	var buf []byte
 	var result string
 	key, val := ctx.Args[1], ctx.Args[2]

@@ -48,6 +48,8 @@ func (r *CommandRegistry) Register(cmd string) {
 		r.commands[strings.ToLower(cmd)] = func() RedisCommand { return &IncrCommand{} }
 	case "multi":
 		r.commands[strings.ToLower(cmd)] = func() RedisCommand { return &MultiCommand{} }
+	case "exec":
+		r.commands[strings.ToLower(cmd)] = func() RedisCommand { return &ExecCommand{} }
 	default:
 		r.commands[strings.ToLower(cmd)] = func() RedisCommand { return &UnknownCommand{} }
 	}
