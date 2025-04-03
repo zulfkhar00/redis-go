@@ -125,8 +125,12 @@ func (server *Server) SetServerIsWaiting(newStatus bool) {
 	isWaiting = newStatus
 }
 
-func (server *Server) TurnMultiOn(clientAdr string) {
+func (server *Server) StartTransaction(clientAdr string) {
 	connToMultiFlag[clientAdr] = true
+}
+
+func (server *Server) FinishTransaction(clientAdr string) {
+	connToMultiFlag[clientAdr] = false
 }
 
 func (server *Server) AddTransactionCommand(clientAdr string, cmd []string) {
@@ -139,4 +143,12 @@ func (server *Server) IsTransactionStarted(clientAdr string) bool {
 		return false
 	}
 	return isOpen
+}
+
+func (server *Server) GetTransactionCommands(clientAdr string) [][]string {
+	cmds, exists := connToQueuedCmds[clientAdr]
+	if !exists {
+		return [][]string{}
+	}
+	return cmds
 }

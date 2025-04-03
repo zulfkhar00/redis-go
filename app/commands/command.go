@@ -13,9 +13,11 @@ type ServerController interface {
 	AddReplica(conn net.Conn)
 	IsServerWaiting() bool
 	SetServerIsWaiting(newStatus bool)
-	TurnMultiOn(clientAdr string)
-	AddTransactionCommand(clientAdr string, cmd []string)
+	StartTransaction(clientAdr string)
+	FinishTransaction(clientAdr string)
 	IsTransactionStarted(clientAdr string) bool
+	AddTransactionCommand(clientAdr string, cmd []string)
+	GetTransactionCommands(clientAdr string) [][]string
 }
 
 type RedisCommand interface {

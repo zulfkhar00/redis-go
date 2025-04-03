@@ -1,6 +1,10 @@
 package commands
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/codecrafters-io/redis-starter-go/app/protocol"
+)
 
 // ExecCommand handles Redis EXEC command
 type ExecCommand struct{}
@@ -15,5 +19,13 @@ func (c *ExecCommand) Execute(ctx *CommandContext) error {
 		return handleError(ctx.Connection, fmt.Errorf("EXEC without MULTI"))
 	}
 
+	cmds := ctx.ServerControl.GetTransactionCommands(clientAdr)
+	if len(cmds) == 0 {
+		if err := writeResponse(ctx.Connection, protocol.FormatRESPArray([]string{})); err != nil {
+			return err
+		}
+	}
+
+	ctx.ServerControl.FinishTransaction(clientAdr)
 	return nil
 }

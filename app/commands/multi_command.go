@@ -14,7 +14,7 @@ func (c *MultiCommand) Name() string {
 }
 
 func (c *MultiCommand) Execute(ctx *CommandContext) error {
-	ctx.ServerControl.TurnMultiOn(ctx.Connection.RemoteAddr().String())
+	ctx.ServerControl.StartTransaction(ctx.Connection.RemoteAddr().String())
 	var buf []byte
 	_, err := ctx.Connection.Write(protocol.AppendSimpleString(buf, "OK"))
 	if err != nil {
