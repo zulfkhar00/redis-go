@@ -23,6 +23,8 @@ type Server struct {
 var replicaConnections []net.Conn
 var ackChan = make(chan bool)
 var isWaiting = false
+var connToMultiFlag = make(map[string]bool)
+var connToQueuedCmds = make(map[string][]string)
 
 func NewServer(cfg *config.Config, kvStore *db.Store) *Server {
 	server := &Server{
@@ -51,6 +53,7 @@ func (server *Server) RegisterCommands() {
 	server.commandRegistry.Register("xrange")
 	server.commandRegistry.Register("xread")
 	server.commandRegistry.Register("incr")
+	server.commandRegistry.Register("multi")
 }
 
 func (server *Server) Start() error {
@@ -119,4 +122,8 @@ func (server *Server) IsServerWaiting() bool {
 
 func (server *Server) SetServerIsWaiting(newStatus bool) {
 	isWaiting = newStatus
+}
+
+func (server *Server) TurnMultiOn(clientAdr string) {
+	connToMultiFlag[clientAdr] = true
 }

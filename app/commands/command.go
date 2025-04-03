@@ -13,6 +13,7 @@ type ServerController interface {
 	AddReplica(conn net.Conn)
 	IsServerWaiting() bool
 	SetServerIsWaiting(newStatus bool)
+	TurnMultiOn(clientAdr string)
 }
 
 type RedisCommand interface {
