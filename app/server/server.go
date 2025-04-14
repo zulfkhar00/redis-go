@@ -55,6 +55,7 @@ func (server *Server) RegisterCommands() {
 	server.commandRegistry.Register("incr")
 	server.commandRegistry.Register("multi")
 	server.commandRegistry.Register("exec")
+	server.commandRegistry.Register("discard")
 }
 
 func (server *Server) Start() error {
@@ -132,6 +133,7 @@ func (server *Server) StartTransaction(clientAdr string) {
 
 func (server *Server) FinishTransaction(clientAdr string) {
 	connToMultiFlag[clientAdr] = false
+	connToQueuedCmds[clientAdr] = make([]*commands.CommandContext, 0)
 }
 
 func (server *Server) AddTransactionCommand(clientAdr string, ctx *commands.CommandContext) {
