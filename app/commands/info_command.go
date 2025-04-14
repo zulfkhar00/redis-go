@@ -15,18 +15,17 @@ func (c *InfoCommand) Name() string {
 }
 
 func (c *InfoCommand) Execute(ctx *CommandContext) error {
+	res, _ := c.DryExecute(ctx)
+	return writeResponse(ctx.Connection, res)
+}
+
+func (c *InfoCommand) DryExecute(ctx *CommandContext) (string, error) {
 	result := ""
 	if len(ctx.Args) == 2 {
 		key := ctx.Args[1]
 		result = c.info(key)
 	}
-	buf := []byte(protocol.FormatBulkString(result))
-	_, err := ctx.Connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
+	return result, nil
 }
 
 func (c *InfoCommand) info(key string) string {
@@ -36,7 +35,7 @@ func (c *InfoCommand) info(key string) string {
 		res += fmt.Sprintf("master_replid:%s\n", config.RedisInfo.ReplicationInfo.MasterReplID)
 		res += fmt.Sprintf("master_repl_offset:%d\n", config.RedisInfo.ReplicationInfo.MasterReplOffset)
 
-		return res
+		return protocol.FormatBulkString(res)
 	}
 
 	return ""

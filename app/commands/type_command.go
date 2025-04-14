@@ -31,3 +31,7 @@ func (c *TypeCommand) Execute(ctx *CommandContext) error {
 
 	return nil
 }
+
+func (c *TypeCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}

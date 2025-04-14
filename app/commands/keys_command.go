@@ -17,13 +17,12 @@ func (c *KeysCommand) Execute(ctx *CommandContext) error {
 	if len(ctx.Args) != 2 {
 		return fmt.Errorf("expecting 1 argument for KEYS")
 	}
+	res, _ := c.DryExecute(ctx)
+	return writeResponse(ctx.Connection, res)
+}
+
+func (c *KeysCommand) DryExecute(ctx *CommandContext) (string, error) {
 	pattern := ctx.Args[1]
 	result := ctx.Store.Keys(pattern)
-	buf := []byte(protocol.FormatRESPArray(result))
-	_, err := ctx.Connection.Write(buf)
-	if err != nil {
-		return fmt.Errorf("cannot write to connection: %v", err)
-	}
-
-	return nil
+	return protocol.FormatRESPBulkStringsArray(result), nil
 }

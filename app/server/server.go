@@ -24,7 +24,7 @@ var replicaConnections []net.Conn
 var ackChan = make(chan bool)
 var isWaiting = false
 var connToMultiFlag = make(map[string]bool)
-var connToQueuedCmds = make(map[string][][]string)
+var connToQueuedCmds = make(map[string][]*commands.CommandContext)
 
 func NewServer(cfg *config.Config, kvStore *db.Store) *Server {
 	server := &Server{
@@ -106,6 +106,7 @@ func handleCommand(cmd []string, server *Server, connection net.Conn) error {
 		ReplicaConnections: replicaConnections,
 		AckChan:            ackChan,
 		ServerControl:      server,
+		CommandRegistry:    server.commandRegistry,
 	}
 
 	command := server.commandRegistry.Get(cmd[0])
@@ -133,8 +134,8 @@ func (server *Server) FinishTransaction(clientAdr string) {
 	connToMultiFlag[clientAdr] = false
 }
 
-func (server *Server) AddTransactionCommand(clientAdr string, cmd []string) {
-	connToQueuedCmds[clientAdr] = append(connToQueuedCmds[clientAdr], cmd)
+func (server *Server) AddTransactionCommand(clientAdr string, ctx *commands.CommandContext) {
+	connToQueuedCmds[clientAdr] = append(connToQueuedCmds[clientAdr], ctx)
 }
 
 func (server *Server) IsTransactionStarted(clientAdr string) bool {
@@ -145,10 +146,10 @@ func (server *Server) IsTransactionStarted(clientAdr string) bool {
 	return isOpen
 }
 
-func (server *Server) GetTransactionCommands(clientAdr string) [][]string {
+func (server *Server) GetTransactionCommands(clientAdr string) []*commands.CommandContext {
 	cmds, exists := connToQueuedCmds[clientAdr]
 	if !exists {
-		return [][]string{}
+		return []*commands.CommandContext{}
 	}
 	return cmds
 }

@@ -16,11 +16,12 @@ type ServerController interface {
 	StartTransaction(clientAdr string)
 	FinishTransaction(clientAdr string)
 	IsTransactionStarted(clientAdr string) bool
-	AddTransactionCommand(clientAdr string, cmd []string)
-	GetTransactionCommands(clientAdr string) [][]string
+	AddTransactionCommand(clientAdr string, ctx *CommandContext)
+	GetTransactionCommands(clientAdr string) []*CommandContext
 }
 
 type RedisCommand interface {
+	DryExecute(ctx *CommandContext) (string, error)
 	Execute(ctx *CommandContext) error
 	Name() string
 }
@@ -32,9 +33,11 @@ type CommandContext struct {
 	Config     *config.Config
 	Role       ServerRole
 
-	ReplicaConnections []net.Conn
-	AckChan            chan bool
-	ServerControl      ServerController
+	ReplicaConnections   []net.Conn
+	AckChan              chan bool
+	ServerControl        ServerController
+	CommandRegistry      *CommandRegistry
+	WaitForCommandFinish bool
 }
 
 type ServerRole int
@@ -43,6 +46,10 @@ const (
 	Master ServerRole = iota
 	Slave
 )
+
+func (r ServerRole) IsMaster() bool {
+	return r == Master
+}
 
 func (r ServerRole) String() string {
 	switch r {

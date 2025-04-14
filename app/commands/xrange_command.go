@@ -29,6 +29,10 @@ func (c *XrangeCommand) Execute(ctx *CommandContext) error {
 	return writeResponse(ctx.Connection, res)
 }
 
+func (c *XrangeCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}
+
 func formatStreamEntries(entries []db.StreamEntry) string {
 	res := fmt.Sprintf("*%d\r\n", len(entries))
 	for _, entry := range entries {
@@ -39,7 +43,7 @@ func formatStreamEntries(entries []db.StreamEntry) string {
 			fields = append(fields, val)
 		}
 
-		fieldsFormatted := protocol.FormatRESPArray(fields)
+		fieldsFormatted := protocol.FormatRESPBulkStringsArray(fields)
 
 		res += fmt.Sprintf("*2\r\n%s%s", idFormatted, fieldsFormatted)
 	}

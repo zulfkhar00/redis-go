@@ -22,3 +22,7 @@ func (c *MultiCommand) Execute(ctx *CommandContext) error {
 	}
 	return nil
 }
+
+func (c *MultiCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}

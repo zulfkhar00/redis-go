@@ -47,6 +47,10 @@ func (c *PsyncCommand) Execute(ctx *CommandContext) error {
 	return nil
 }
 
+func (c *PsyncCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}
+
 func psync(replicationIDFromReplica, offsetFromReplica string) {
 	replicationID, err := strconv.ParseInt(replicationIDFromReplica, 10, 64)
 	if err != nil {

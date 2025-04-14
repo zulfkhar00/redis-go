@@ -23,3 +23,7 @@ func (c *UnknownCommand) Execute(ctx *CommandContext) error {
 
 	return nil
 }
+
+func (c *UnknownCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}

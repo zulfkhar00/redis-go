@@ -14,6 +14,7 @@ import (
 	"github.com/codecrafters-io/redis-starter-go/app/config"
 	"github.com/codecrafters-io/redis-starter-go/app/db"
 	"github.com/codecrafters-io/redis-starter-go/app/protocol"
+	"github.com/codecrafters-io/redis-starter-go/app/utils"
 )
 
 type Replica struct {
@@ -86,11 +87,12 @@ func (server *Replica) handleConnection(connection net.Conn) (err error) {
 
 func handleReplicaCommand(cmd []string, server *Replica, connection net.Conn) error {
 	ctx := &commands.CommandContext{
-		Args:       cmd,
-		Store:      server.kvStore,
-		Connection: connection,
-		Config:     server.cfg,
-		Role:       commands.Slave,
+		Args:            cmd,
+		Store:           server.kvStore,
+		Connection:      connection,
+		Config:          server.cfg,
+		Role:            commands.Slave,
+		CommandRegistry: server.commandRegistry,
 	}
 
 	command := server.commandRegistry.Get(cmd[0])
@@ -130,7 +132,7 @@ func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("tried to connect to master node on %s", masterAddr)
 	}
-	_, err = masterConn.Write([]byte(protocol.FormatRESPArray([]string{"PING"})))
+	_, err = masterConn.Write([]byte(protocol.FormatRESPBulkStringsArray([]string{"PING"})))
 	if err != nil {
 		return nil, nil, fmt.Errorf("couldn't send PING to master node")
 	}
@@ -147,7 +149,7 @@ func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 
 	// PART 2a
 	replConfCmds1 := []string{"REPLCONF", "listening-port", fmt.Sprint(server.cfg.Port)}
-	_, err = masterConn.Write([]byte(protocol.FormatRESPArray(replConfCmds1)))
+	_, err = masterConn.Write([]byte(protocol.FormatRESPBulkStringsArray(replConfCmds1)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -162,7 +164,7 @@ func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 
 	// PART 2b
 	replConfCmds2 := []string{"REPLCONF", "capa", "psync2"}
-	_, err = masterConn.Write([]byte(protocol.FormatRESPArray(replConfCmds2)))
+	_, err = masterConn.Write([]byte(protocol.FormatRESPBulkStringsArray(replConfCmds2)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -185,7 +187,7 @@ func (server *Replica) sendHandshake() (net.Conn, *bufio.Reader, error) {
 		psyncCmds = append(psyncCmds, fmt.Sprint(server.cfg.MasterReplID))
 	}
 	psyncCmds = append(psyncCmds, fmt.Sprint(server.cfg.MasterReplOffset))
-	_, err = masterConn.Write([]byte(protocol.FormatRESPArray(psyncCmds)))
+	_, err = masterConn.Write([]byte(protocol.FormatRESPBulkStringsArray(psyncCmds)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -248,19 +250,26 @@ func (server *Replica) processReplicationCommands(masterConn net.Conn, reader *b
 		case "ping":
 			// master alive
 		case "set":
+			var val interface{}
+			key, valStr := cmd[1], cmd[2]
+			val = valStr
+			valInt, err := utils.ToInt64(valStr)
+			if err == nil {
+				val = valInt
+			}
 			if len(cmd) == 3 {
-				_ = server.kvStore.Set(cmd[1], cmd[2], -1)
+				_ = server.kvStore.Set(key, val, -1)
 			} else if len(cmd) == 4 {
 				expireTimeMs, err := strconv.Atoi(cmd[3])
 				if err != nil {
 					fmt.Printf("expire time is not a number")
 				}
-				_ = server.kvStore.Set(cmd[1], cmd[2], expireTimeMs)
+				_ = server.kvStore.Set(key, val, expireTimeMs)
 			}
 		case "replconf":
 			if len(cmd) >= 3 && strings.ToLower(cmd[1]) == "getack" {
 				ackCmd := []string{"REPLCONF", "ACK", fmt.Sprintf("%d", server.cfg.MasterReplOffset)}
-				respData := protocol.FormatRESPArray(ackCmd)
+				respData := protocol.FormatRESPBulkStringsArray(ackCmd)
 				_, err := masterConn.Write([]byte(respData))
 				if err != nil {
 					fmt.Printf("Replica: Error sending ACK: %v\n", err)

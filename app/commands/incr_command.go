@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/codecrafters-io/redis-starter-go/app/db"
 	"github.com/codecrafters-io/redis-starter-go/app/protocol"
@@ -21,7 +20,7 @@ func (c *IncrCommand) Execute(ctx *CommandContext) error {
 	}
 	clientAdr := ctx.Connection.RemoteAddr().String()
 	if ctx.ServerControl.IsTransactionStarted(clientAdr) {
-		ctx.ServerControl.AddTransactionCommand(clientAdr, ctx.Args)
+		ctx.ServerControl.AddTransactionCommand(clientAdr, ctx)
 		_, err := ctx.Connection.Write([]byte("+QUEUED\r\n"))
 		if err != nil {
 			return fmt.Errorf("cannot write to connection: %v", err)
@@ -29,24 +28,32 @@ func (c *IncrCommand) Execute(ctx *CommandContext) error {
 		return nil
 	}
 
+	res, err := c.DryExecute(ctx)
+	if err != nil {
+		return handleError(ctx.Connection, err)
+	}
+	return writeResponse(ctx.Connection, res)
+}
+
+func (c *IncrCommand) DryExecute(ctx *CommandContext) (string, error) {
 	incrementedVal := int64(1)
 
 	key := ctx.Args[1]
 	val := ctx.Store.Get(key)
+
 	if val == nil {
-		_ = ctx.Store.Set(key, fmt.Sprintf("%d", incrementedVal), -1)
-		return writeResponse(ctx.Connection, protocol.FormatRESPInt(int64(incrementedVal)))
+		_ = ctx.Store.Set(key, incrementedVal, -1)
+		return protocol.FormatRESPInt(int64(incrementedVal)), nil
 	}
 
 	if val.ValueType != db.IntegerType {
-		return handleError(ctx.Connection, fmt.Errorf("value is not an integer or out of range"))
+		return "", fmt.Errorf("value is not an integer or out of range")
 	}
 
-	oldValStr, _ := val.Value.(string)
-	oldVal, _ := strconv.ParseInt(oldValStr, 10, 64)
+	oldVal := val.ToInt64()
 
 	incrementedVal = oldVal + 1
-	_ = ctx.Store.Set(key, fmt.Sprintf("%d", incrementedVal), -1)
+	_ = ctx.Store.Set(key, incrementedVal, -1)
 
-	return writeResponse(ctx.Connection, protocol.FormatRESPInt(incrementedVal))
+	return protocol.FormatRESPInt(incrementedVal), nil
 }

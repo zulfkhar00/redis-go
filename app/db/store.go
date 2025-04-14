@@ -105,6 +105,14 @@ func (val *KeyValue) ToString() string {
 	return valStr
 }
 
+func (val *KeyValue) ToInt64() int64 {
+	valInt, ok := val.Value.(int64)
+	if !ok {
+		return -1
+	}
+	return valInt
+}
+
 // Store represents the key-value store
 type Store struct {
 	data map[string]KeyValue

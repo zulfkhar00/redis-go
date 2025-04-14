@@ -15,10 +15,15 @@ func (c *CommandCommand) Name() string {
 
 func (c *CommandCommand) Execute(ctx *CommandContext) error {
 	var buf []byte
-	buf = protocol.AppendSimpleString(buf, "")
+	res, _ := c.DryExecute(ctx)
+	buf = protocol.AppendSimpleString(buf, res)
 	_, err := ctx.Connection.Write(buf)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %v", err)
 	}
 	return nil
+}
+
+func (c *CommandCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
 }

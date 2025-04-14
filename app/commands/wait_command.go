@@ -41,7 +41,7 @@ func (c *WaitCommand) Execute(ctx *CommandContext) error {
 	// err = handleReplconfCommand([]string{"REPLCONF", "GETACK", "*"}, server, connection)
 	for _, replica := range ctx.ReplicaConnections {
 		go func() {
-			_, err = replica.Write([]byte(protocol.FormatRESPArray([]string{"REPLCONF", "GETACK", "*"})))
+			_, err = replica.Write([]byte(protocol.FormatRESPBulkStringsArray([]string{"REPLCONF", "GETACK", "*"})))
 			if err != nil {
 				fmt.Printf("[master->replica] error writing to connection: %v\n", err)
 			}
@@ -73,4 +73,8 @@ func (c *WaitCommand) Execute(ctx *CommandContext) error {
 	}
 
 	return nil
+}
+
+func (c *WaitCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
 }

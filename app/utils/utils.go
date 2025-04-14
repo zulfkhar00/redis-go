@@ -36,3 +36,11 @@ func UnixSecTimestampToTime(unixTimestamp string) time.Time {
 
 	return time.Unix(expireTimestampSec, 0) // 0 nanoseconds
 }
+
+func ToInt64(val string) (int64, error) {
+	valInt, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return -1, err
+	}
+	return valInt, nil
+}

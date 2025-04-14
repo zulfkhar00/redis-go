@@ -22,3 +22,7 @@ func (c *PingCommand) Execute(ctx *CommandContext) error {
 	}
 	return nil
 }
+
+func (c *PingCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}

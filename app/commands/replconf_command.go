@@ -20,7 +20,7 @@ func (c *ReplconfCommand) Execute(ctx *CommandContext) error {
 	receiveReplicaConfig(ctx.Args)
 	fmt.Printf("Global master received: %v\n", ctx.Args)
 	if strings.ToLower(ctx.Args[1]) == "getack" {
-		buf = []byte(protocol.FormatRESPArray([]string{"REPLCONF", "GETACK", "*"}))
+		buf = []byte(protocol.FormatRESPBulkStringsArray([]string{"REPLCONF", "GETACK", "*"}))
 		if len(ctx.ReplicaConnections) == 0 {
 			return fmt.Errorf("no replicas found")
 		}
@@ -57,6 +57,10 @@ func (c *ReplconfCommand) Execute(ctx *CommandContext) error {
 	}
 
 	return nil
+}
+
+func (c *ReplconfCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
 }
 
 func receiveReplicaConfig(cmd []string) {

@@ -16,10 +16,15 @@ func (c *EchoCommand) Name() string {
 
 func (c *EchoCommand) Execute(ctx *CommandContext) error {
 	var buf []byte
-	buf = protocol.AppendSimpleString(buf, strings.Join(ctx.Args[1:], " "))
+	res, _ := c.DryExecute(ctx)
+	buf = protocol.AppendSimpleString(buf, res)
 	_, err := ctx.Connection.Write(buf)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %v", err)
 	}
 	return nil
+}
+
+func (c *EchoCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return strings.Join(ctx.Args[1:], " "), nil
 }

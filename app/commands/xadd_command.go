@@ -38,3 +38,7 @@ func (c *XaddCommand) Execute(ctx *CommandContext) error {
 
 	return nil
 }
+
+func (c *XaddCommand) DryExecute(ctx *CommandContext) (string, error) {
+	return "", nil
+}

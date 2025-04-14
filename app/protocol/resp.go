@@ -43,8 +43,8 @@ func FormatBulkString(value string) string {
 	return "$" + strconv.Itoa(len(value)) + "\r\n" + value + "\r\n"
 }
 
-// FormatRESPArray formats a string slice as a RESP array
-func FormatRESPArray(elems []string) string {
+// FormatRESPBulkStringsArray formats a string slice as a RESP array of bulk strings
+func FormatRESPBulkStringsArray(elems []string) string {
 	resp := fmt.Sprintf("*%d\r\n", len(elems))
 	for _, elem := range elems {
 		resp += FormatBulkString(elem)
@@ -52,7 +52,16 @@ func FormatRESPArray(elems []string) string {
 	return resp
 }
 
-// FormatRESPArray formats a integer as a RESP integer
+// FormatRESPArray formats a string slice as a RESP array
+func FormatRESPArray(elems []string) string {
+	resp := fmt.Sprintf("*%d\r\n", len(elems))
+	for _, elem := range elems {
+		resp += elem
+	}
+	return resp
+}
+
+// FormatRESPInt formats a integer as a RESP integer
 func FormatRESPInt(number int64) string {
 	return fmt.Sprintf(":%d\r\n", number)
 }
@@ -60,6 +69,11 @@ func FormatRESPInt(number int64) string {
 // AppendSimpleString appends a RESP simple string to a byte slice
 func AppendSimpleString(buf []byte, str string) []byte {
 	return fmt.Appendf(buf, "+%s\r\n", str)
+}
+
+// FormatRESPSimpleString formats string to RESP simple string
+func FormatRESPSimpleString(str string) string {
+	return fmt.Sprintf("+%s\r\n", str)
 }
 
 // FormatRESPError formats error as a RESP error
